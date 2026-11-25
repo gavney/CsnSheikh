@@ -22,10 +22,10 @@ def load_config(
     # Load .env if present
     if env_path is None:
         env_path = Path(".env")
-    if env_path.exists():
+        if env_path.exists():
+            load_dotenv(env_path)
+    elif env_path.exists():
         load_dotenv(env_path)
-    else:
-        load_dotenv()
 
     if config_path is None:
         config_path = Path("config.yaml")
@@ -37,6 +37,20 @@ def load_config(
 
     # Extract secrets / overrides from env
     proxy_val = os.getenv("SOCKS5_PROXY") or os.getenv("SOCKS_PROXY") or os.getenv("CASINO_PROXY")
+    if not proxy_val:
+        p_host = os.getenv("SOCKS5_HOST") or os.getenv("PROXY_HOST")
+        if p_host:
+            from urllib.parse import quote
+            p_port = os.getenv("SOCKS5_PORT") or os.getenv("PROXY_PORT") or "1080"
+            p_user = os.getenv("SOCKS5_USER") or os.getenv("PROXY_USER") or os.getenv("SOCKS5_USERNAME")
+            p_pass = os.getenv("SOCKS5_PASSWORD") or os.getenv("PROXY_PASSWORD") or os.getenv("SOCKS5_PASS")
+            if p_user and p_pass:
+                proxy_val = f"socks5://{quote(p_user)}:{quote(p_pass)}@{p_host}:{p_port}"
+            elif p_user:
+                proxy_val = f"socks5://{quote(p_user)}@{p_host}:{p_port}"
+            else:
+                proxy_val = f"socks5://{p_host}:{p_port}"
+
     env_overrides = {
         "socks5_proxy": proxy_val,
         "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN"),
