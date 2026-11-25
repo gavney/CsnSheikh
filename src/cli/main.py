@@ -196,13 +196,22 @@ async def manual_login(
         context.on("request", handle_request)
         page = context.pages[0] if context.pages else await context.new_page()
         try:
-            await page.goto(url)
-            while context.pages:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            logger.debug("Page goto non-fatal error: %s", e)
+
+        while True:
+            try:
+                if not context.pages:
+                    break
                 await asyncio.sleep(1.0)
+            except Exception:
+                break
+
+        try:
+            await context.close()
         except Exception:
             pass
-        finally:
-            await context.close()
     finally:
         if bridge:
             await bridge.close()
