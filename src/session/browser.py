@@ -179,18 +179,6 @@ class PlaywrightSessionProvider(SessionProvider):
             context = await self._ensure_context()
             page = await context.new_page()
 
-            # Abort heavy images, media, and fonts to speed up load time by 5-10x
-            async def route_filter(route):
-                if route.request.resource_type in ["image", "media", "font"]:
-                    await route.abort()
-                else:
-                    await route.continue_()
-
-            try:
-                await page.route("**/*", route_filter)
-            except Exception:
-                pass
-
             extracted_info: Optional[SessionInfo] = None
             extracted_event = asyncio.Event()
 

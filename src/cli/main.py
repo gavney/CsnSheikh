@@ -199,7 +199,7 @@ async def manual_login(
 
             async def do_goto():
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    await page.goto(url)
                 except Exception as e:
                     logger.debug("Page goto non-fatal error: %s", e)
 
