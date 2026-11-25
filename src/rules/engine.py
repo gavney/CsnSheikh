@@ -62,6 +62,18 @@ class RuleEngine:
             if rule.tables != "all" and table_id not in rule.tables:
                 continue
 
+            # If this is a global rule ('all'), check if this table has a dedicated active rule override
+            if rule.tables == "all":
+                has_specific = any(
+                    r.enabled
+                    and r.id != rule.id
+                    and r.tables != "all"
+                    and table_id in r.tables
+                    for r in self.rules
+                )
+                if has_specific:
+                    continue
+
             state_key = (rule.id, table_id)
             state = self.states.get(state_key)
             if state is None:

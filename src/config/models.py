@@ -50,6 +50,7 @@ class RuleLevelConfig(BaseModel):
 class RuleConfig(BaseModel):
     """Declarative monitoring rule."""
     id: str
+    name: Optional[str] = None
     enabled: bool = True
     tables: Union[Literal["all"], List[str]] = "all"
     perspective: Literal["player", "banker"] = "player"
@@ -75,6 +76,7 @@ class AppConfig(BaseModel):
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     telegram_admin_chat_id: Optional[str] = None
+    bot_admin_password: str = "CasinoBoss2026!Strict#Admin"
 
     pragmatic_jsessionid: Optional[str] = None
     pragmatic_socket_server: Optional[str] = None

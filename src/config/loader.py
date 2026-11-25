@@ -40,6 +40,7 @@ def load_config(
         "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID"),
         "telegram_admin_chat_id": os.getenv("TELEGRAM_ADMIN_CHAT_ID"),
+        "bot_admin_password": os.getenv("BOT_ADMIN_PASSWORD"),
         "pragmatic_jsessionid": os.getenv("PRAGMATIC_JSESSIONID"),
         "pragmatic_socket_server": os.getenv("PRAGMATIC_SOCKET_SERVER"),
         "pragmatic_client_origin": os.getenv("PRAGMATIC_CLIENT_ORIGIN"),
@@ -52,3 +53,59 @@ def load_config(
             data[k] = v
 
     return AppConfig.model_validate(data)
+
+
+def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
+    """Save configuration to YAML file, omitting dynamic secrets."""
+    if config_path is None:
+        config_path = Path("config.yaml")
+
+    data = {
+        "tables": [
+            {
+                "id": t.id,
+                "name": t.name,
+                "url": t.url,
+                "enabled": t.enabled,
+            }
+            for t in config.tables
+        ],
+        "connection": {
+            "heartbeat_interval_sec": config.connection.heartbeat_interval_sec,
+            "watchdog_timeout_sec": config.connection.watchdog_timeout_sec,
+            "reconnect_min_delay_sec": config.connection.reconnect_min_delay_sec,
+            "reconnect_max_delay_sec": config.connection.reconnect_max_delay_sec,
+            "reconnect_jitter_sec": config.connection.reconnect_jitter_sec,
+            "stagger_delay_sec": config.connection.stagger_delay_sec,
+            "max_reconnect_attempts": config.connection.max_reconnect_attempts,
+        },
+        "session": {
+            "provider": config.session.provider,
+            "browser_profile_dir": str(config.session.browser_profile_dir),
+            "auto_refresh_on_auth_error": config.session.auto_refresh_on_auth_error,
+            "proactive_refresh_interval_sec": config.session.proactive_refresh_interval_sec,
+        },
+        "storage": {
+            "database_path": str(config.storage.database_path),
+            "window_size": config.storage.window_size,
+        },
+        "rules": [
+            {
+                "id": r.id,
+                "name": r.name,
+                "enabled": r.enabled,
+                "tables": r.tables,
+                "perspective": r.perspective,
+                "tie_policy": r.tie_policy,
+                "reset_on_shoe": r.reset_on_shoe,
+                "condition": r.condition,
+                "levels": [{"at": lvl.at, "actions": lvl.actions} for lvl in r.levels],
+                "rearm": r.rearm,
+                "notify_on_end": r.notify_on_end,
+            }
+            for r in config.rules
+        ],
+    }
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, sort_keys=False)

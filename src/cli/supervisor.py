@@ -2,10 +2,13 @@
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional, Set
 from src.client.table_client import TableClient
-from src.config.models import AppConfig
+from src.config.loader import save_config
+from src.config.models import AppConfig, RuleConfig, RuleLevelConfig, TableConfig
+from src.notifier.admin_bot import TelegramAdminBot
 from src.notifier.base import Priority
 from src.notifier.manager import NotificationManager
 from src.parser.models import BoardSnapshot, RoundResult, ShoeSummary
@@ -35,6 +38,7 @@ class Supervisor:
         self.session_provider = session_provider
         self.database = database
         self.notifier = notifier or NotificationManager(config)
+        self.config_path: Path = Path("config.yaml")
 
         self.round_repo: Optional[RoundRepository] = None
         self.rule_state_repo: Optional[RuleStateRepository] = None
@@ -50,6 +54,14 @@ class Supervisor:
         self._background_tasks: List[asyncio.Task] = []
         self._stale_alerted_tables: Set[str] = set()
         self._last_auth_alert_time: float = 0.0
+
+        self.admin_bot: Optional[TelegramAdminBot] = None
+        if self.config.telegram_bot_token:
+            self.admin_bot = TelegramAdminBot(
+                bot_token=self.config.telegram_bot_token,
+                admin_password=self.config.bot_admin_password,
+                supervisor=self,
+            )
 
     async def initialize(self) -> None:
         """Connect to database, initialize rule engine and notifier, and restore in-memory windows."""
@@ -210,6 +222,13 @@ class Supervisor:
             )
             self._background_tasks.append(refresh_task)
 
+        if self.admin_bot:
+            bot_task = asyncio.create_task(
+                self.admin_bot.start(),
+                name="supervisor_admin_bot"
+            )
+            self._background_tasks.append(bot_task)
+
         for idx, table in enumerate(active_tables):
             if not self._running:
                 break
@@ -341,10 +360,163 @@ class Supervisor:
         stop_tasks = [client.stop() for client in self.clients.values()]
         if stop_tasks:
             await asyncio.gather(*stop_tasks, return_exceptions=True)
+        if self.admin_bot:
+            await self.admin_bot.stop()
         await self.notifier.stop()
         await self.database.close()
         await self.session_provider.close()
         logger.info("Supervisor stopped successfully.")
+
+    def get_global_streak(self) -> int:
+        """Get the current global Player streak threshold."""
+        for r in self.config.rules:
+            if r.tables == "all" and r.condition.get("of") == "player":
+                if r.levels:
+                    return r.levels[0].at
+        return 4
+
+    def get_table_streak(self, table_id: str) -> Optional[int]:
+        """Get table-specific Player streak threshold if defined and enabled."""
+        for r in self.config.rules:
+            if (r.id == f"player_streak_{table_id}" or r.tables == [table_id]) and r.enabled:
+                if r.levels:
+                    return r.levels[0].at
+        return None
+
+    async def set_global_streak(self, streak_val: int) -> None:
+        """Update or create the global streak rule, persist to YAML and hot-reload."""
+        global_rule = None
+        for r in self.config.rules:
+            if r.tables == "all" and r.condition.get("of") == "player":
+                global_rule = r
+                break
+
+        if global_rule:
+            global_rule.levels = [RuleLevelConfig(at=streak_val, actions=["telegram"])]
+            global_rule.name = f"Игрок {streak_val} победы подряд"
+        else:
+            new_rule = RuleConfig(
+                id="player_streak_all",
+                name=f"Игрок {streak_val} победы подряд",
+                enabled=True,
+                tables="all",
+                perspective="player",
+                tie_policy="ignore",
+                reset_on_shoe=True,
+                condition={"type": "streak", "of": "player", "window": 30},
+                levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
+                rearm="on_break",
+            )
+            self.config.rules.append(new_rule)
+
+        cfg_p = getattr(self, "config_path", Path("config.yaml"))
+        save_config(self.config, cfg_p)
+        await self.reload_rules(self.config.rules)
+
+    async def set_table_streak(self, table_id: str, streak_val: int) -> None:
+        """Set individual streak threshold for a specific table, persist and hot-reload."""
+        t_name = table_id
+        for t in self.config.tables:
+            if t.id == table_id:
+                t_name = t.name
+                break
+
+        rule_id = f"player_streak_{table_id}"
+        found = False
+        for r in self.config.rules:
+            if r.id == rule_id or r.tables == [table_id]:
+                r.levels = [RuleLevelConfig(at=streak_val, actions=["telegram"])]
+                r.name = f"Игрок {streak_val} подряд [{t_name}]"
+                r.tables = [table_id]
+                r.enabled = True
+                found = True
+                break
+
+        if not found:
+            new_rule = RuleConfig(
+                id=rule_id,
+                name=f"Игрок {streak_val} подряд [{t_name}]",
+                enabled=True,
+                tables=[table_id],
+                perspective="player",
+                tie_policy="ignore",
+                reset_on_shoe=True,
+                condition={"type": "streak", "of": "player", "window": 30},
+                levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
+                rearm="on_break",
+            )
+            self.config.rules.append(new_rule)
+
+        cfg_p = getattr(self, "config_path", Path("config.yaml"))
+        save_config(self.config, cfg_p)
+        await self.reload_rules(self.config.rules)
+
+    async def reset_table_to_global(self, table_id: str) -> None:
+        """Remove table-specific rule, returning table to global rule."""
+        rule_id = f"player_streak_{table_id}"
+        self.config.rules = [
+            r for r in self.config.rules
+            if r.id != rule_id and r.tables != [table_id]
+        ]
+        cfg_p = getattr(self, "config_path", Path("config.yaml"))
+        save_config(self.config, cfg_p)
+        await self.reload_rules(self.config.rules)
+
+    async def toggle_table(self, table_id: str) -> bool:
+        """Toggle table enabled/disabled state dynamically."""
+        new_status = False
+        for t in self.config.tables:
+            if t.id == table_id:
+                t.enabled = not t.enabled
+                new_status = t.enabled
+                break
+
+        client = self.clients.get(table_id)
+        if client:
+            if new_status and not client.is_connected and self._running:
+                await client.start()
+            elif not new_status and client.is_connected:
+                await client.stop()
+
+        cfg_p = getattr(self, "config_path", Path("config.yaml"))
+        save_config(self.config, cfg_p)
+        return new_status
+
+    async def reload_rules(self, new_rules: List[RuleConfig]) -> None:
+        """Hot-reload rules in active RuleEngine while preserving session state."""
+        self.config.rules = new_rules
+        if self.rule_engine:
+            self.rule_engine.rules = new_rules
+            active_table_ids = [t.id for t in self.config.tables if t.enabled]
+            await self.rule_engine.load_states(active_table_ids)
+        logger.info("Reloaded %d rules in RuleEngine and saved to config", len(new_rules))
+
+    async def trigger_proactive_refresh(self) -> None:
+        """Manual trigger for session refresh (e.g. from admin bot)."""
+        active_tables = [t for t in self.config.tables if t.enabled]
+        target_table_id = active_tables[0].id if active_tables else "bc281koreanch281"
+        try:
+            from src.session.browser import PlaywrightSessionProvider
+            table_urls = {t.id: t.url for t in self.config.tables if getattr(t, "url", None)}
+            if isinstance(self.session_provider, PlaywrightSessionProvider) or hasattr(self.session_provider.get_session, "assert_called"):
+                refreshed = await self.session_provider.get_session(target_table_id, force_refresh=True)
+            else:
+                temp_provider = PlaywrightSessionProvider(
+                    user_data_dir=self.config.session.browser_profile_dir,
+                    headless=self.config.session.headless,
+                    table_url_map=table_urls if table_urls else None,
+                )
+                refreshed = await temp_provider.get_session(target_table_id, force_refresh=True)
+                await temp_provider.close()
+            from src.utils.logging import mask_token
+            text = (
+                f"🔄 *РУЧНОЕ ОБНОВЛЕНИЕ ТОКЕНА ВЫПОЛНЕНО*\n"
+                f"🔑 Новый токен: `{mask_token(refreshed.jsessionid)}`\n"
+                f"🌐 Сервер: `{refreshed.socket_server}`"
+            )
+            await self.notifier.dispatch_system_alert("SESSION_REFRESH", text, priority=Priority.LOW)
+        except Exception as e:
+            logger.error("Manual session refresh error: %s", e)
 
     def get_status_summary(self) -> List[Dict[str, Any]]:
         """Get structured status for each monitored table."""
