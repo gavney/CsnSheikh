@@ -15,20 +15,20 @@ DEFAULT_CACHE_PATH = Path(".session_cache.json")
 
 # Known game URLs on the casino portal
 TABLE_URL_MAP = {
-    "bc281koreanch281": "https://bxgnanhldtnm.top/ru/casino/game/68018/speed-baccarat-16-korean",
-    "kkqnazmd8ttq7fgd": "https://bxgnanhldtnm.top/ru/casino/game/51523/speed-baccarat-2",
-    "oq808ojps709qqaf": "https://bxgnanhldtnm.top/ru/casino/game/59580/baccarat-6",
-    "tobc51koreanto51": "https://bxgnanhldtnm.top/ru/casino/game/81262/korean-speed-baccarat-3",
-    "bc392chromabc392": "https://bxgnanhldtnm.top/ru/casino/game/122203/korean-speed-baccarat-2",
-    "speedbca18generi": "https://bxgnanhldtnm.top/ru/casino/game/81947/indonesian-speed-baccarat-1",
-    "speedbca14gesbc1": "https://bxgnanhldtnm.top/ru/casino/game/85635/thai-speed-baccarat-1",
-    "spto41bctorobc41": "https://bxgnanhldtnm.top/ru/casino/game/93989/japanese-speed-baccarat-1",
-    "spto42bctorobc42": "https://bxgnanhldtnm.top/ru/casino/game/93990/japanese-speed-baccarat-2",
-    "spijbnsu408vmv71": "https://bxgnanhldtnm.top/ru/casino/game/94056/chinese-speed-baccarat-1",
-    "spijbnsu408vmv72": "https://bxgnanhldtnm.top/ru/casino/game/94059/chinese-speed-baccarat-2",
-    "spto11bctorobc11": "https://bxgnanhldtnm.top/ru/casino/game/94375/vietnamese-speed-baccarat-1",
-    "m88hicogrzeod202": "https://bxgnanhldtnm.top/ru/casino/game/124383/speed-baccarat-13",
-    "spijbnsu408vmv73": "https://bxgnanhldtnm.top/ru/casino/game/122197/chinese-speed-baccarat-3",
+    "bc281koreanch281": "https://1xbet.fi/ru/casino/brand?game=68018",
+    "kkqnazmd8ttq7fgd": "https://1xbet.fi/ru/casino/brand?game=51523",
+    "oq808ojps709qqaf": "https://1xbet.fi/ru/casino/brand?game=59580",
+    "tobc51koreanto51": "https://1xbet.fi/ru/casino/brand?game=81262",
+    "bc392chromabc392": "https://1xbet.fi/ru/casino/brand?game=122203",
+    "speedbca18generi": "https://1xbet.fi/ru/casino/brand?game=81947",
+    "speedbca14gesbc1": "https://1xbet.fi/ru/casino/brand?game=85635",
+    "spto41bctorobc41": "https://1xbet.fi/ru/casino/brand?game=93989",
+    "spto42bctorobc42": "https://1xbet.fi/ru/casino/brand?game=93990",
+    "spijbnsu408vmv71": "https://1xbet.fi/ru/casino/brand?game=94056",
+    "spijbnsu408vmv72": "https://1xbet.fi/ru/casino/brand?game=94059",
+    "spto11bctorobc11": "https://1xbet.fi/ru/casino/brand?game=94375",
+    "m88hicogrzeod202": "https://1xbet.fi/ru/casino/brand?game=124383",
+    "spijbnsu408vmv73": "https://1xbet.fi/ru/casino/brand?game=122197",
 }
 
 
