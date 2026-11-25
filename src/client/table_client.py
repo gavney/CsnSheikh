@@ -52,11 +52,13 @@ class TableClient:
         on_shoe_summary: Optional[Callable[[ShoeSummary], Union[None, Awaitable[None]]]] = None,
         on_snapshot: Optional[Callable[[BoardSnapshot], Union[None, Awaitable[None]]]] = None,
         on_auth_error: Optional[Callable[[str, str, float], Union[None, Awaitable[None]]]] = None,
+        proxy: Optional[str] = None,
     ) -> None:
         self.table_id = table_id
         self.table_name = table_name
         self.session_provider = session_provider
         self.config = connection_config or ConnectionConfig()
+        self.proxy = proxy or self.config.proxy
         self.parser = event_parser or EventParser()
 
         self.on_round = on_round
@@ -196,8 +198,9 @@ class TableClient:
         headers = session.get_headers()
 
         logger.info(
-            "Connecting to %s (Origin: %s, token: %s)",
+            "Connecting to %s (proxy: %s, Origin: %s, token: %s)",
             ws_url,
+            mask_token(self.proxy) if self.proxy else "direct",
             headers.get("Origin"),
             mask_token(session.jsessionid)
         )
@@ -207,6 +210,7 @@ class TableClient:
             "ping_interval": None,
             "ping_timeout": None,
             "close_timeout": 5.0,
+            "proxy": self.proxy if self.proxy else None,
         }
 
         async with websockets.connect(ws_url, **connect_kwargs) as ws:

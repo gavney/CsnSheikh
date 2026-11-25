@@ -24,6 +24,7 @@ class ConnectionConfig(BaseModel):
     max_reconnect_attempts: int = 10
     system_heartbeat_interval_sec: float = 3600.0
     round_staleness_threshold_sec: float = 300.0
+    proxy: Optional[str] = None
 
 
 class SessionConfig(BaseModel):
@@ -33,6 +34,7 @@ class SessionConfig(BaseModel):
     auto_refresh_on_auth_error: bool = True
     headless: bool = True
     proactive_refresh_interval_sec: float = 1800.0
+    proxy: Optional[str] = None
 
 
 class StorageConfig(BaseModel):
@@ -73,6 +75,7 @@ class AppConfig(BaseModel):
     rules: List[RuleConfig] = Field(default_factory=list)
 
     # Environment variables overrides (secrets)
+    socks5_proxy: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     telegram_admin_chat_id: Optional[str] = None

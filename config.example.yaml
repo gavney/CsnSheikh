@@ -64,12 +64,14 @@ connection:
   reconnect_jitter_sec: 0.5
   stagger_delay_sec: 2.0
   max_reconnect_attempts: 10
+  # proxy: socks5://127.0.0.1:10808  # SOCKS5 proxy URL (или через SOCKS5_PROXY в .env)
 
 session:
   provider: env   # env | playwright
   browser_profile_dir: ./browser_profile
   auto_refresh_on_auth_error: true
   proactive_refresh_interval_sec: 1800  # Фоновое автообновление токена каждые 30 минут (0 = выключено)
+  # proxy: socks5://127.0.0.1:10808  # SOCKS5 proxy для Playwright (или через SOCKS5_PROXY в .env)
 
 storage:
   database_path: ./casino_monitor.db

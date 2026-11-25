@@ -157,3 +157,14 @@ def test_formatter_markdown_output():
     assert "🔴🔴🟢🔴" in formatted  # emoji outcomes
     assert "#round_999" not in formatted  # round number removed
     assert "Правило" not in formatted  # rule line removed
+
+
+@pytest.mark.asyncio
+async def test_telegram_notifier_direct_connection_without_proxy():
+    """Verify that Telegram notifier initializes HTTP client without proxy and trust_env=False."""
+    notifier = TelegramNotifier(bot_token="test_token", default_chat_id="12345")
+    await notifier.start()
+    try:
+        assert notifier._client.trust_env is False
+    finally:
+        await notifier.stop()

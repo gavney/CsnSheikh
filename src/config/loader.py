@@ -36,7 +36,9 @@ def load_config(
             data = yaml.safe_load(f) or {}
 
     # Extract secrets / overrides from env
+    proxy_val = os.getenv("SOCKS5_PROXY") or os.getenv("SOCKS_PROXY") or os.getenv("CASINO_PROXY")
     env_overrides = {
+        "socks5_proxy": proxy_val,
         "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID"),
         "telegram_admin_chat_id": os.getenv("TELEGRAM_ADMIN_CHAT_ID"),
@@ -51,6 +53,16 @@ def load_config(
     for k, v in env_overrides.items():
         if v:
             data[k] = v
+
+    # Propagate socks5_proxy to connection and session if not explicitly set
+    app_proxy = data.get("socks5_proxy")
+    if app_proxy:
+        conn = data.setdefault("connection", {})
+        if not conn.get("proxy"):
+            conn["proxy"] = app_proxy
+        sess = data.setdefault("session", {})
+        if not sess.get("proxy"):
+            sess["proxy"] = app_proxy
 
     return AppConfig.model_validate(data)
 
@@ -78,12 +90,14 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> None:
             "reconnect_jitter_sec": config.connection.reconnect_jitter_sec,
             "stagger_delay_sec": config.connection.stagger_delay_sec,
             "max_reconnect_attempts": config.connection.max_reconnect_attempts,
+            **({"proxy": config.connection.proxy} if config.connection.proxy else {}),
         },
         "session": {
             "provider": config.session.provider,
             "browser_profile_dir": str(config.session.browser_profile_dir),
             "auto_refresh_on_auth_error": config.session.auto_refresh_on_auth_error,
             "proactive_refresh_interval_sec": config.session.proactive_refresh_interval_sec,
+            **({"proxy": config.session.proxy} if config.session.proxy else {}),
         },
         "storage": {
             "database_path": str(config.storage.database_path),

@@ -202,10 +202,13 @@ class Supervisor:
         # Dispatch startup alert to Admin/Telegram
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         table_lines = "\n".join(f"  • {t.name} (`{t.id}`)" for t in active_tables)
+        proxy_info = f"`{mask_token(self.config.socks5_proxy)}`" if self.config.socks5_proxy else "прямое подключение"
         startup_text = (
             f"📅 Время запуска: `{now_str}`\n"
             f"🎲 Активные столы ({len(active_tables)}):\n{table_lines}\n"
             f"⚙️ Провайдер сессий: `{self.config.session.provider}`\n"
+            f"🌐 Прокси (казино): {proxy_info}\n"
+            f"🤖 Бот Telegram: прямое подключение (без прокси)\n"
             f"⏱ Таймер отслеживания времени жизни токена запущен."
         )
         await self.notifier.dispatch_system_alert("STARTUP", startup_text, priority=Priority.NORMAL)
@@ -317,6 +320,7 @@ class Supervisor:
                             user_data_dir=self.config.session.browser_profile_dir,
                             headless=self.config.session.headless,
                             table_url_map=table_urls if table_urls else None,
+                            proxy=self.config.session.proxy,
                         )
                         refreshed_session = await temp_provider.get_session(target_table_id, force_refresh=True)
                         await temp_provider.close()

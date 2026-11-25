@@ -33,3 +33,23 @@ async def test_env_session_provider():
     assert s1.table_id == "bc281koreanch281"
 
     await provider.close()
+
+
+def test_build_playwright_proxy():
+    from src.session.browser import build_playwright_proxy
+
+    # None or empty
+    assert build_playwright_proxy(None) is None
+    assert build_playwright_proxy("") is None
+
+    # SOCKS5 without auth
+    p1 = build_playwright_proxy("socks5://127.0.0.1:10808")
+    assert p1 == {"server": "socks5://127.0.0.1:10808"}
+
+    # SOCKS5 with auth
+    p2 = build_playwright_proxy("socks5://admin:secret123@1.2.3.4:9050")
+    assert p2 == {
+        "server": "socks5://1.2.3.4:9050",
+        "username": "admin",
+        "password": "secret123",
+    }

@@ -75,6 +75,24 @@ def load_sessions_from_cache(cache_path: Path = DEFAULT_CACHE_PATH) -> Dict[str,
         return {}
 
 
+def build_playwright_proxy(proxy_url: Optional[str]) -> Optional[Dict[str, str]]:
+    """Convert a proxy URL (e.g. socks5://user:pass@host:port) into Playwright ProxySettings dict."""
+    if not proxy_url:
+        return None
+    parsed = urlparse(proxy_url)
+    if not parsed.scheme or not parsed.hostname:
+        return None
+    server = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port:
+        server = f"{server}:{parsed.port}"
+    settings = {"server": server}
+    if parsed.username:
+        settings["username"] = parsed.username
+    if parsed.password:
+        settings["password"] = parsed.password
+    return settings
+
+
 class PlaywrightSessionProvider(SessionProvider):
     """Acquires live session tokens by navigating in a persistent Playwright browser context."""
 
@@ -84,9 +102,11 @@ class PlaywrightSessionProvider(SessionProvider):
         headless: bool = True,
         table_url_map: Optional[Dict[str, str]] = None,
         cache_path: Path = DEFAULT_CACHE_PATH,
+        proxy: Optional[str] = None,
     ) -> None:
         self.user_data_dir = Path(user_data_dir)
         self.headless = headless
+        self.proxy = proxy
         merged_urls = dict(TABLE_URL_MAP)
         if table_url_map:
             merged_urls.update(table_url_map)
@@ -108,15 +128,20 @@ class PlaywrightSessionProvider(SessionProvider):
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
         logger.info(
-            "Launching browser context (headless=%s, profile=%s)",
+            "Launching browser context (headless=%s, profile=%s, proxy=%s)",
             self.headless,
-            self.user_data_dir
+            self.user_data_dir,
+            mask_token(self.proxy) if self.proxy else "direct",
         )
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.user_data_dir),
-            headless=self.headless,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
-        )
+        proxy_settings = build_playwright_proxy(self.proxy)
+        launch_kwargs = {
+            "user_data_dir": str(self.user_data_dir),
+            "headless": self.headless,
+            "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+        }
+        if proxy_settings:
+            launch_kwargs["proxy"] = proxy_settings
+        self._context = await self._playwright.chromium.launch_persistent_context(**launch_kwargs)
         return self._context
 
     async def get_session(self, table_id: str, force_refresh: bool = False) -> SessionInfo:

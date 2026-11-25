@@ -48,7 +48,7 @@ class TelegramAdminBot:
             return
 
         self._running = True
-        self._client = self._custom_client or httpx.AsyncClient(timeout=30.0)
+        self._client = self._custom_client or httpx.AsyncClient(timeout=30.0, trust_env=False, proxy=None)
         self._poll_task = asyncio.create_task(self._polling_loop(), name="tg_admin_bot_poll")
         logger.info("TelegramAdminBot started polling (admin password protected).")
 

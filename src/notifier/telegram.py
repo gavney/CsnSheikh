@@ -45,7 +45,7 @@ class TelegramNotifier(Notifier):
         if self._running:
             return
         self._running = True
-        self._client = self._custom_client or httpx.AsyncClient(timeout=10.0)
+        self._client = self._custom_client or httpx.AsyncClient(timeout=10.0, trust_env=False, proxy=None)
         self._worker_task = asyncio.create_task(self._worker_loop(), name="tg_notifier_worker")
         logger.info(
             "TelegramNotifier started (bot_token=%s, default_chat=%s)",

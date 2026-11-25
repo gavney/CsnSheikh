@@ -83,6 +83,7 @@ async def run_supervisor(
         session_provider = PlaywrightSessionProvider(
             user_data_dir=config.session.browser_profile_dir,
             headless=config.session.headless,
+            proxy=config.session.proxy,
         )
     else:
         session_provider = EnvSessionProvider(
@@ -118,16 +119,20 @@ async def run_supervisor(
 
 async def manual_login(
     url: str = "https://1xbet.fi/ru/casino/brand?game=122197",
-    profile_dir: Path = Path("./browser_profile")
+    profile_dir: Path = Path("./browser_profile"),
+    proxy: Optional[str] = None,
 ) -> None:
     """Open a headed browser window for manual login and automatic token interception."""
     from playwright.async_api import async_playwright
+    from src.session.browser import build_playwright_proxy
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     print("\n" + "=" * 70)
     print("ВХОД В АККАУНТ И АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ТОКЕНА")
     print(f"Открытие браузера: {url}")
     print(f"Каталог профиля  : {profile_dir.resolve()}")
+    if proxy:
+        print(f"Прокси браузера  : {proxy}")
     print("=" * 70)
     print("1. В открывшемся окне выполните вход в аккаунт.")
     print("2. Перейдите на любой стол Live Baccarat (например, Speed Baccarat).")
@@ -138,11 +143,16 @@ async def manual_login(
     captured_count = 0
 
     async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            headless=False,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
-        )
+        proxy_settings = build_playwright_proxy(proxy)
+        launch_kwargs = {
+            "user_data_dir": str(profile_dir),
+            "headless": False,
+            "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+        }
+        if proxy_settings:
+            launch_kwargs["proxy"] = proxy_settings
+
+        context = await p.chromium.launch_persistent_context(**launch_kwargs)
 
         def handle_request(req):
             nonlocal captured_count
@@ -197,6 +207,7 @@ async def fetch_and_save_token(
     provider = PlaywrightSessionProvider(
         user_data_dir=config.session.browser_profile_dir,
         headless=True,
+        proxy=config.session.proxy,
     )
     print(f"\nПолучение токена для стола '{table_id}' через headless-браузер...")
     try:
@@ -262,6 +273,7 @@ async def run_single_table(
         session_provider = PlaywrightSessionProvider(
             user_data_dir=config.session.browser_profile_dir,
             headless=config.session.headless,
+            proxy=config.session.proxy,
         )
     else:
         session_provider = EnvSessionProvider(
@@ -413,6 +425,8 @@ def main():
     # 'login' command
     login_parser = subparsers.add_parser("login", help="Open browser to log in manually and persist session in browser_profile")
     login_parser.add_argument("--url", default="https://1xbet.fi/ru/casino/brand?game=122197", help="Portal URL to open for login")
+    login_parser.add_argument("--proxy", default=None, help="SOCKS5/HTTP proxy URL (defaults to SOCKS5_PROXY env var)")
+    login_parser.add_argument("--env", default=".env", help="Path to .env file")
 
     # 'test-notify' command
     notify_parser = subparsers.add_parser("test-notify", help="Send test alert to verify Telegram/Console delivery")
@@ -446,7 +460,10 @@ def main():
     args = parser.parse_args()
 
     if args.command == "login":
-        asyncio.run(manual_login(args.url))
+        if Path(args.env).exists():
+            load_dotenv(Path(args.env))
+        proxy = args.proxy or os.getenv("SOCKS5_PROXY") or os.getenv("SOCKS_PROXY") or os.getenv("CASINO_PROXY")
+        asyncio.run(manual_login(args.url, proxy=proxy))
     elif args.command == "get-token":
         asyncio.run(fetch_and_save_token(args.table, Path(args.config), Path(args.env)))
     elif args.command == "set-token":
