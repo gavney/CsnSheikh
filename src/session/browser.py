@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import parse_qs, urlparse
@@ -92,6 +93,7 @@ class PlaywrightSessionProvider(SessionProvider):
         self.table_url_map = merged_urls
         self.cache_path = Path(cache_path)
         self._cached_sessions: Dict[str, SessionInfo] = load_sessions_from_cache(self.cache_path)
+        self._last_refresh_time: float = 0.0
         self._playwright = None
         self._context = None
         self._lock = asyncio.Lock()
@@ -120,6 +122,16 @@ class PlaywrightSessionProvider(SessionProvider):
     async def get_session(self, table_id: str, force_refresh: bool = False) -> SessionInfo:
         """Extract a valid session by opening table page and intercepting game tokens."""
         async with self._lock:
+            now = time.time()
+            # If force_refresh was requested but another table refreshed within 30s, reuse the fresh token!
+            if force_refresh and (now - self._last_refresh_time < 30.0) and table_id in self._cached_sessions:
+                logger.info(
+                    "Reusing freshly refreshed token for table '%s' (obtained %.1fs ago)",
+                    table_id,
+                    now - self._last_refresh_time,
+                )
+                return self._cached_sessions[table_id]
+
             if not force_refresh and table_id in self._cached_sessions:
                 return self._cached_sessions[table_id]
 
@@ -206,6 +218,7 @@ class PlaywrightSessionProvider(SessionProvider):
                     mask_token(extracted_info.jsessionid),
                 )
                 # Universal session: update all tables with the new token so other tables don't need to re-open browser!
+                self._last_refresh_time = time.time()
                 self._cached_sessions[table_id] = extracted_info
                 save_session_to_cache(extracted_info, self.cache_path)
                 for other_tid in self.table_url_map:
