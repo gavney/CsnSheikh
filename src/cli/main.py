@@ -195,10 +195,15 @@ async def manual_login(
 
         context.on("request", handle_request)
         page = context.pages[0] if context.pages else await context.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        except Exception as e:
-            logger.debug("Page goto non-fatal error: %s", e)
+        print("Окно браузера успешно открыто на экране. Выполняется переход на страницу...")
+
+        async def do_goto():
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as e:
+                logger.debug("Page goto non-fatal error: %s", e)
+
+        asyncio.create_task(do_goto())
 
         while True:
             try:
