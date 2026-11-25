@@ -114,6 +114,7 @@ class PlaywrightSessionProvider(SessionProvider):
         self.cache_path = Path(cache_path)
         self._cached_sessions: Dict[str, SessionInfo] = load_sessions_from_cache(self.cache_path)
         self._last_refresh_time: float = 0.0
+        self._proxy_bridge = None
         self._playwright = None
         self._context = None
         self._lock = asyncio.Lock()
@@ -126,6 +127,15 @@ class PlaywrightSessionProvider(SessionProvider):
         from playwright.async_api import async_playwright
 
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
+
+        launch_proxy = self.proxy
+        if launch_proxy and ("socks5://" in launch_proxy or "socks5h://" in launch_proxy):
+            parsed = urlparse(launch_proxy)
+            if parsed.username or parsed.password:
+                from .proxy_bridge import LocalSocks5Bridge
+                self._proxy_bridge = LocalSocks5Bridge(launch_proxy)
+                launch_proxy = await self._proxy_bridge.start()
+
         self._playwright = await async_playwright().start()
         logger.info(
             "Launching browser context (headless=%s, profile=%s, proxy=%s)",
@@ -133,7 +143,7 @@ class PlaywrightSessionProvider(SessionProvider):
             self.user_data_dir,
             mask_token(self.proxy) if self.proxy else "direct",
         )
-        proxy_settings = build_playwright_proxy(self.proxy)
+        proxy_settings = build_playwright_proxy(launch_proxy)
         launch_kwargs = {
             "user_data_dir": str(self.user_data_dir),
             "headless": self.headless,
@@ -268,3 +278,6 @@ class PlaywrightSessionProvider(SessionProvider):
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
+        if self._proxy_bridge:
+            await self._proxy_bridge.close()
+            self._proxy_bridge = None

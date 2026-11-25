@@ -126,6 +126,15 @@ async def manual_login(
     from playwright.async_api import async_playwright
     from src.session.browser import build_playwright_proxy
 
+    bridge = None
+    launch_proxy = proxy
+    if launch_proxy and ("socks5://" in launch_proxy or "socks5h://" in launch_proxy):
+        parsed = urlparse(launch_proxy)
+        if parsed.username or parsed.password:
+            from src.session.proxy_bridge import LocalSocks5Bridge
+            bridge = LocalSocks5Bridge(launch_proxy)
+            launch_proxy = await bridge.start()
+
     profile_dir.mkdir(parents=True, exist_ok=True)
     print("\n" + "=" * 70)
     print("ВХОД В АККАУНТ И АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ТОКЕНА")
@@ -142,17 +151,18 @@ async def manual_login(
 
     captured_count = 0
 
-    async with async_playwright() as p:
-        proxy_settings = build_playwright_proxy(proxy)
-        launch_kwargs = {
-            "user_data_dir": str(profile_dir),
-            "headless": False,
-            "args": ["--no-sandbox", "--disable-setuid-sandbox"],
-        }
-        if proxy_settings:
-            launch_kwargs["proxy"] = proxy_settings
+    try:
+        async with async_playwright() as p:
+            proxy_settings = build_playwright_proxy(launch_proxy)
+            launch_kwargs = {
+                "user_data_dir": str(profile_dir),
+                "headless": False,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+            }
+            if proxy_settings:
+                launch_kwargs["proxy"] = proxy_settings
 
-        context = await p.chromium.launch_persistent_context(**launch_kwargs)
+            context = await p.chromium.launch_persistent_context(**launch_kwargs)
 
         def handle_request(req):
             nonlocal captured_count
@@ -193,6 +203,9 @@ async def manual_login(
             pass
         finally:
             await context.close()
+    finally:
+        if bridge:
+            await bridge.close()
 
     print(f"\n[OK] Браузер закрыт. Перехвачено сессий: {captured_count}. Данные сохранены в {profile_dir}/ и .session_cache.json.")
 
@@ -460,9 +473,9 @@ def main():
     args = parser.parse_args()
 
     if args.command == "login":
-        if Path(args.env).exists():
-            load_dotenv(Path(args.env))
-        proxy = args.proxy or os.getenv("SOCKS5_PROXY") or os.getenv("SOCKS_PROXY") or os.getenv("CASINO_PROXY")
+        env_p = Path(args.env) if hasattr(args, "env") and args.env else Path(".env")
+        cfg = load_config(env_path=env_p)
+        proxy = getattr(args, "proxy", None) or cfg.socks5_proxy
         asyncio.run(manual_login(args.url, proxy=proxy))
     elif args.command == "get-token":
         asyncio.run(fetch_and_save_token(args.table, Path(args.config), Path(args.env)))
