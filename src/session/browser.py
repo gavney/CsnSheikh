@@ -132,6 +132,18 @@ class PlaywrightSessionProvider(SessionProvider):
             context = await self._ensure_context()
             page = await context.new_page()
 
+            # Abort heavy images, media, and fonts to speed up load time by 5-10x
+            async def route_filter(route):
+                if route.request.resource_type in ["image", "media", "font"]:
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            try:
+                await page.route("**/*", route_filter)
+            except Exception:
+                pass
+
             extracted_info: Optional[SessionInfo] = None
             extracted_event = asyncio.Event()
 
@@ -140,7 +152,23 @@ class PlaywrightSessionProvider(SessionProvider):
                 nonlocal extracted_info
                 url = req.url
                 # Look for websocket handshake or launcher URL
-                if "/game?" in url and "JSESSIONID=" in url:
+                if "JSESSIONID=" in url and "pragmaticplaylive" in url and not extracted_info:
+                    parsed = urlparse(url)
+                    qs = parse_qs(parsed.query)
+                    token = qs.get("JSESSIONID", [""])[0]
+                    if token:
+                        server = qs.get("socket_server", [""])[0] or "wss://gs24.pragmaticplaylive.net/game"
+                        if server.endswith("/game"):
+                            server = server[:-5]
+                        origin = req.headers.get("origin") or "https://client.pragmaticplaylive.net"
+                        extracted_info = SessionInfo(
+                            jsessionid=token,
+                            socket_server=server,
+                            table_id=table_id,
+                            client_origin=origin,
+                        )
+                        extracted_event.set()
+                elif "/game?" in url and "JSESSIONID=" in url:
                     parsed = urlparse(url)
                     qs = parse_qs(parsed.query)
                     jsessionid = qs.get("JSESSIONID", [""])[0]
@@ -154,20 +182,6 @@ class PlaywrightSessionProvider(SessionProvider):
                         client_origin=origin,
                     )
                     extracted_event.set()
-                elif "/desktop/launcher/?" in url and "JSESSIONID=" in url:
-                    parsed = urlparse(url)
-                    qs = parse_qs(parsed.query)
-                    jsessionid = qs.get("JSESSIONID", [""])[0]
-                    socket_server = qs.get("socket_server", [""])[0]
-                    origin = f"https://{parsed.netloc}"
-                    if jsessionid and socket_server:
-                        extracted_info = SessionInfo(
-                            jsessionid=jsessionid,
-                            socket_server=socket_server,
-                            table_id=table_id,
-                            client_origin=origin,
-                        )
-                        extracted_event.set()
 
             page.on("request", handle_request)
 
@@ -177,7 +191,7 @@ class PlaywrightSessionProvider(SessionProvider):
 
                 # Wait for token capture
                 try:
-                    await asyncio.wait_for(extracted_event.wait(), timeout=30.0)
+                    await asyncio.wait_for(extracted_event.wait(), timeout=60.0)
                 except asyncio.TimeoutError:
                     raise TimeoutError(
                         f"Timeout waiting for game session tokens on '{target_url}'. "
@@ -191,8 +205,19 @@ class PlaywrightSessionProvider(SessionProvider):
                     extracted_info.socket_server,
                     mask_token(extracted_info.jsessionid),
                 )
+                # Universal session: update all tables with the new token so other tables don't need to re-open browser!
                 self._cached_sessions[table_id] = extracted_info
                 save_session_to_cache(extracted_info, self.cache_path)
+                for other_tid in self.table_url_map:
+                    if other_tid != table_id:
+                        other_info = SessionInfo(
+                            jsessionid=extracted_info.jsessionid,
+                            socket_server=extracted_info.socket_server,
+                            table_id=other_tid,
+                            client_origin=extracted_info.client_origin,
+                        )
+                        self._cached_sessions[other_tid] = other_info
+                        save_session_to_cache(other_info, self.cache_path)
                 return extracted_info
             finally:
                 await page.close()
