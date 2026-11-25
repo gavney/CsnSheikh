@@ -164,59 +164,59 @@ async def manual_login(
 
             context = await p.chromium.launch_persistent_context(**launch_kwargs)
 
-        def handle_request(req):
-            nonlocal captured_count
-            url_str = req.url
-            if "JSESSIONID=" in url_str and ("/game?" in url_str or "/desktop/launcher/?" in url_str):
-                parsed = urlparse(url_str)
-                qs = parse_qs(parsed.query)
-                token = qs.get("JSESSIONID", [""])[0]
-                tbl = qs.get("tableId", [""])[0] or qs.get("table_id", [""])[0] or "bc281koreanch281"
-                server = qs.get("socket_server", [""])[0]
-                if not server and "/game?" in url_str:
-                    server = f"wss://{parsed.netloc}"
-                origin = req.headers.get("origin") or f"https://client.{parsed.netloc.split('.', 1)[-1]}"
-                if token and server:
-                    captured_count += 1
-                    sess = SessionInfo(
-                        jsessionid=token,
-                        socket_server=server,
-                        table_id=tbl,
-                        client_origin=origin,
-                    )
-                    save_session_to_cache(sess)
-                    print("\n" + "*" * 65)
-                    print("🔥 [УСПЕХ] Токен автоматически перехвачен и сохранен!")
-                    print(f"   Стол          : {tbl}")
-                    print(f"   Сервер        : {server}")
-                    print(f"   JSESSIONID    : {token[:8]}...{token[-6:]}")
-                    print("   Кэш сессий    : .session_cache.json")
-                    print("*" * 65 + "\n")
+            def handle_request(req):
+                nonlocal captured_count
+                url_str = req.url
+                if "JSESSIONID=" in url_str and ("/game?" in url_str or "/desktop/launcher/?" in url_str):
+                    parsed = urlparse(url_str)
+                    qs = parse_qs(parsed.query)
+                    token = qs.get("JSESSIONID", [""])[0]
+                    tbl = qs.get("tableId", [""])[0] or qs.get("table_id", [""])[0] or "bc281koreanch281"
+                    server = qs.get("socket_server", [""])[0]
+                    if not server and "/game?" in url_str:
+                        server = f"wss://{parsed.netloc}"
+                    origin = req.headers.get("origin") or f"https://client.{parsed.netloc.split('.', 1)[-1]}"
+                    if token and server:
+                        captured_count += 1
+                        sess = SessionInfo(
+                            jsessionid=token,
+                            socket_server=server,
+                            table_id=tbl,
+                            client_origin=origin,
+                        )
+                        save_session_to_cache(sess)
+                        print("\n" + "*" * 65)
+                        print("🔥 [УСПЕХ] Токен автоматически перехвачен и сохранен!")
+                        print(f"   Стол          : {tbl}")
+                        print(f"   Сервер        : {server}")
+                        print(f"   JSESSIONID    : {token[:8]}...{token[-6:]}")
+                        print("   Кэш сессий    : .session_cache.json")
+                        print("*" * 65 + "\n")
 
-        context.on("request", handle_request)
-        page = context.pages[0] if context.pages else await context.new_page()
-        print("Окно браузера успешно открыто на экране. Выполняется переход на страницу...")
+            context.on("request", handle_request)
+            page = context.pages[0] if context.pages else await context.new_page()
+            print("Окно браузера открыто. Переход на страницу...")
 
-        async def do_goto():
-            try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            except Exception as e:
-                logger.debug("Page goto non-fatal error: %s", e)
+            async def do_goto():
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                except Exception as e:
+                    logger.debug("Page goto non-fatal error: %s", e)
 
-        asyncio.create_task(do_goto())
+            asyncio.create_task(do_goto())
 
-        while True:
-            try:
-                if not context.pages:
+            while True:
+                try:
+                    if not context.pages:
+                        break
+                    await asyncio.sleep(1.0)
+                except Exception:
                     break
-                await asyncio.sleep(1.0)
-            except Exception:
-                break
 
-        try:
-            await context.close()
-        except Exception:
-            pass
+            try:
+                await context.close()
+            except Exception:
+                pass
     finally:
         if bridge:
             await bridge.close()
