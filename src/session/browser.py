@@ -1,0 +1,207 @@
+"""Playwright-based session provider that extracts session tokens from browser."""
+
+import asyncio
+import json
+from pathlib import Path
+from typing import Dict, Optional
+from urllib.parse import parse_qs, urlparse
+from src.utils.logging import get_logger, mask_token
+
+from .base import SessionInfo, SessionProvider
+
+logger = get_logger("session.playwright")
+
+DEFAULT_CACHE_PATH = Path(".session_cache.json")
+
+# Known game URLs on the casino portal
+TABLE_URL_MAP = {
+    "bc281koreanch281": "https://bxgnanhldtnm.top/ru/casino/game/68018/speed-baccarat-16-korean",
+    "kkqnazmd8ttq7fgd": "https://bxgnanhldtnm.top/ru/casino/game/51523/speed-baccarat-2",
+    "oq808ojps709qqaf": "https://bxgnanhldtnm.top/ru/casino/game/59580/baccarat-6",
+    "tobc51koreanto51": "https://bxgnanhldtnm.top/ru/casino/game/81262/korean-speed-baccarat-3",
+    "bc392chromabc392": "https://bxgnanhldtnm.top/ru/casino/game/122203/korean-speed-baccarat-2",
+    "speedbca18generi": "https://bxgnanhldtnm.top/ru/casino/game/81947/indonesian-speed-baccarat-1",
+    "speedbca14gesbc1": "https://bxgnanhldtnm.top/ru/casino/game/85635/thai-speed-baccarat-1",
+    "spto41bctorobc41": "https://bxgnanhldtnm.top/ru/casino/game/93989/japanese-speed-baccarat-1",
+    "spto42bctorobc42": "https://bxgnanhldtnm.top/ru/casino/game/93990/japanese-speed-baccarat-2",
+    "spijbnsu408vmv71": "https://bxgnanhldtnm.top/ru/casino/game/94056/chinese-speed-baccarat-1",
+    "spijbnsu408vmv72": "https://bxgnanhldtnm.top/ru/casino/game/94059/chinese-speed-baccarat-2",
+    "spto11bctorobc11": "https://bxgnanhldtnm.top/ru/casino/game/94375/vietnamese-speed-baccarat-1",
+    "m88hicogrzeod202": "https://bxgnanhldtnm.top/ru/casino/game/124383/speed-baccarat-13",
+    "spijbnsu408vmv73": "https://bxgnanhldtnm.top/ru/casino/game/122197/chinese-speed-baccarat-3",
+}
+
+
+def save_session_to_cache(session: SessionInfo, cache_path: Path = DEFAULT_CACHE_PATH) -> None:
+    """Save session info to local cache JSON file."""
+    data = {}
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    data[session.table_id] = {
+        "jsessionid": session.jsessionid,
+        "socket_server": session.socket_server,
+        "table_id": session.table_id,
+        "client_origin": session.client_origin,
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Saved session for table '%s' to cache file %s", session.table_id, cache_path)
+
+
+def load_sessions_from_cache(cache_path: Path = DEFAULT_CACHE_PATH) -> Dict[str, SessionInfo]:
+    """Load cached sessions from local JSON file."""
+    if not cache_path.exists():
+        return {}
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        result = {}
+        for k, v in raw.items():
+            if isinstance(v, dict) and "jsessionid" in v:
+                result[k] = SessionInfo(
+                    jsessionid=v["jsessionid"],
+                    socket_server=v.get("socket_server", ""),
+                    table_id=v.get("table_id", k),
+                    client_origin=v.get("client_origin", ""),
+                )
+        return result
+    except Exception as e:
+        logger.warning("Failed to load session cache from %s: %s", cache_path, e)
+        return {}
+
+
+class PlaywrightSessionProvider(SessionProvider):
+    """Acquires live session tokens by navigating in a persistent Playwright browser context."""
+
+    def __init__(
+        self,
+        user_data_dir: Path = Path("./browser_profile"),
+        headless: bool = True,
+        table_url_map: Optional[Dict[str, str]] = None,
+        cache_path: Path = DEFAULT_CACHE_PATH,
+    ) -> None:
+        self.user_data_dir = Path(user_data_dir)
+        self.headless = headless
+        merged_urls = dict(TABLE_URL_MAP)
+        if table_url_map:
+            merged_urls.update(table_url_map)
+        self.table_url_map = merged_urls
+        self.cache_path = Path(cache_path)
+        self._cached_sessions: Dict[str, SessionInfo] = load_sessions_from_cache(self.cache_path)
+        self._playwright = None
+        self._context = None
+        self._lock = asyncio.Lock()
+
+    async def _ensure_context(self):
+        """Lazily initialize Playwright browser context."""
+        if self._context is not None:
+            return self._context
+
+        from playwright.async_api import async_playwright
+
+        self.user_data_dir.mkdir(parents=True, exist_ok=True)
+        self._playwright = await async_playwright().start()
+        logger.info(
+            "Launching browser context (headless=%s, profile=%s)",
+            self.headless,
+            self.user_data_dir
+        )
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(self.user_data_dir),
+            headless=self.headless,
+            args=["--no-sandbox", "--disable-setuid-sandbox"],
+        )
+        return self._context
+
+    async def get_session(self, table_id: str, force_refresh: bool = False) -> SessionInfo:
+        """Extract a valid session by opening table page and intercepting game tokens."""
+        async with self._lock:
+            if not force_refresh and table_id in self._cached_sessions:
+                return self._cached_sessions[table_id]
+
+            target_url = self.table_url_map.get(table_id)
+            if not target_url:
+                raise ValueError(
+                    f"No URL configured for table '{table_id}'. Available tables: {list(self.table_url_map.keys())}"
+                )
+
+            context = await self._ensure_context()
+            page = await context.new_page()
+
+            extracted_info: Optional[SessionInfo] = None
+            extracted_event = asyncio.Event()
+
+            # Handler for intercepted requests
+            def handle_request(req):
+                nonlocal extracted_info
+                url = req.url
+                # Look for websocket handshake or launcher URL
+                if "/game?" in url and "JSESSIONID=" in url:
+                    parsed = urlparse(url)
+                    qs = parse_qs(parsed.query)
+                    jsessionid = qs.get("JSESSIONID", [""])[0]
+                    table = qs.get("tableId", [table_id])[0]
+                    socket_server = f"wss://{parsed.netloc}"
+                    origin = req.headers.get("origin") or f"https://client.{parsed.netloc.split('.', 1)[-1]}"
+                    extracted_info = SessionInfo(
+                        jsessionid=jsessionid,
+                        socket_server=socket_server,
+                        table_id=table,
+                        client_origin=origin,
+                    )
+                    extracted_event.set()
+                elif "/desktop/launcher/?" in url and "JSESSIONID=" in url:
+                    parsed = urlparse(url)
+                    qs = parse_qs(parsed.query)
+                    jsessionid = qs.get("JSESSIONID", [""])[0]
+                    socket_server = qs.get("socket_server", [""])[0]
+                    origin = f"https://{parsed.netloc}"
+                    if jsessionid and socket_server:
+                        extracted_info = SessionInfo(
+                            jsessionid=jsessionid,
+                            socket_server=socket_server,
+                            table_id=table_id,
+                            client_origin=origin,
+                        )
+                        extracted_event.set()
+
+            page.on("request", handle_request)
+
+            try:
+                logger.info("Opening page for table '%s': %s", table_id, target_url)
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
+
+                # Wait for token capture
+                try:
+                    await asyncio.wait_for(extracted_event.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    raise TimeoutError(
+                        f"Timeout waiting for game session tokens on '{target_url}'. "
+                        f"Please ensure browser profile is authenticated."
+                    )
+
+                assert extracted_info is not None
+                logger.info(
+                    "Successfully captured session for table '%s': server=%s, token=%s",
+                    table_id,
+                    extracted_info.socket_server,
+                    mask_token(extracted_info.jsessionid),
+                )
+                self._cached_sessions[table_id] = extracted_info
+                save_session_to_cache(extracted_info, self.cache_path)
+                return extracted_info
+            finally:
+                await page.close()
+
+    async def close(self) -> None:
+        """Close browser context and Playwright process."""
+        if self._context:
+            await self._context.close()
+            self._context = None
+        if self._playwright:
+            await self._playwright.stop()
+            self._playwright = None

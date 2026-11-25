@@ -1,0 +1,90 @@
+tables:
+  - id: bc281koreanch281
+    name: Korean Speed Baccarat 1
+    url: https://bxgnanhldtnm.top/ru/casino/game/68018/speed-baccarat-16-korean
+    enabled: true
+  - id: kkqnazmd8ttq7fgd
+    name: Speed Baccarat 2
+    url: https://bxgnanhldtnm.top/ru/casino/game/51523/speed-baccarat-2
+    enabled: true
+  - id: oq808ojps709qqaf
+    name: Baccarat 6
+    url: https://bxgnanhldtnm.top/ru/casino/game/59580/baccarat-6
+    enabled: true
+  - id: tobc51koreanto51
+    name: Korean Speed Baccarat 3
+    url: https://bxgnanhldtnm.top/ru/casino/game/81262/korean-speed-baccarat-3
+    enabled: true
+  - id: bc392chromabc392
+    name: Korean Speed Baccarat 2
+    url: https://bxgnanhldtnm.top/ru/casino/game/122203/korean-speed-baccarat-2
+    enabled: true
+  - id: speedbca18generi
+    name: Indonesian Speed Baccarat 1
+    url: https://bxgnanhldtnm.top/ru/casino/game/81947/indonesian-speed-baccarat-1
+    enabled: true
+  - id: speedbca14gesbc1
+    name: Thai Speed Baccarat 1
+    url: https://bxgnanhldtnm.top/ru/casino/game/85635/thai-speed-baccarat-1
+    enabled: true
+  - id: spto41bctorobc41
+    name: Japanese Speed Baccarat 1
+    url: https://bxgnanhldtnm.top/ru/casino/game/93989/japanese-speed-baccarat-1
+    enabled: true
+  - id: spto42bctorobc42
+    name: Japanese Speed Baccarat 2
+    url: https://bxgnanhldtnm.top/ru/casino/game/93990/japanese-speed-baccarat-2
+    enabled: true
+  - id: spijbnsu408vmv71
+    name: Chinese Speed Baccarat 1
+    url: https://bxgnanhldtnm.top/ru/casino/game/94056/chinese-speed-baccarat-1
+    enabled: true
+  - id: spijbnsu408vmv72
+    name: Chinese Speed Baccarat 2
+    url: https://bxgnanhldtnm.top/ru/casino/game/94059/chinese-speed-baccarat-2
+    enabled: true
+  - id: spto11bctorobc11
+    name: Vietnamese Speed Baccarat 1
+    url: https://bxgnanhldtnm.top/ru/casino/game/94375/vietnamese-speed-baccarat-1
+    enabled: true
+  - id: m88hicogrzeod202
+    name: Speed Baccarat 13
+    url: https://bxgnanhldtnm.top/ru/casino/game/124383/speed-baccarat-13
+    enabled: true
+  - id: spijbnsu408vmv73
+    name: Chinese Speed Baccarat 3
+    url: https://bxgnanhldtnm.top/ru/casino/game/122197/chinese-speed-baccarat-3
+    enabled: true
+
+connection:
+  heartbeat_interval_sec: 10.0
+  watchdog_timeout_sec: 15.0
+  reconnect_min_delay_sec: 1.0
+  reconnect_max_delay_sec: 60.0
+  reconnect_jitter_sec: 0.5
+  stagger_delay_sec: 2.0
+  max_reconnect_attempts: 10
+
+session:
+  provider: env   # env | playwright
+  browser_profile_dir: ./browser_profile
+  auto_refresh_on_auth_error: true
+  proactive_refresh_interval_sec: 1800  # Фоновое автообновление токена каждые 30 минут (0 = выключено)
+
+storage:
+  database_path: ./casino_monitor.db
+  window_size: 200
+
+rules:
+  - id: player_streak_4
+    name: "Игрок 4 победы подряд"
+    enabled: true
+    tables: all
+    perspective: player        # player | banker
+    tie_policy: ignore         # ignore | break | count_as_loss
+    reset_on_shoe: true
+    condition: { type: streak, of: player, window: 30 }
+    levels:
+      - { at: 4, actions: [telegram] }
+    rearm: on_break
+    notify_on_end: false
