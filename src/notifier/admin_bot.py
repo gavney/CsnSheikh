@@ -34,6 +34,8 @@ class TelegramAdminBot:
         self._poll_task: Optional[asyncio.Task] = None
         self._auth_sessions: Set[int] = set()
         self._last_update_id: int = 0
+        self._waiting_input: Dict[int, Dict[str, Any]] = {}
+        self._last_viewed_table: Dict[int, str] = {}
 
     @property
     def is_running(self) -> bool:
@@ -240,10 +242,92 @@ class TelegramAdminBot:
             return
 
         # If user IS authenticated
-        if text in ("/start", "/menu", "меню", "настройки"):
-            await self._send_main_menu(chat_id)
-        else:
-            await self._send_main_menu(chat_id)
+        # 1. Handle cancellation of input
+        if text.lower() in ("/cancel", "отмена", "cancel"):
+            inp_state = self._waiting_input.pop(user_id, None)
+            if inp_state:
+                await self.send_message(chat_id, "❌ Ввод числа отменен.")
+                if inp_state.get("target") == "table" and "table_id" in inp_state:
+                    await self._send_table_menu(chat_id, inp_state["table_id"])
+                else:
+                    await self._send_all_tables_menu(chat_id)
+            else:
+                await self._send_main_menu(chat_id)
+            return
+
+        # 2. Handle number input (1 to N)
+        try:
+            val = int(text)
+            is_int = True
+        except ValueError:
+            is_int = False
+
+        if is_int:
+            if val < 1:
+                await self.send_message(chat_id, "⚠️ Число должно быть не меньше 1 (от 1 до N). Попробуйте еще раз:")
+                return
+            if val > 100:
+                await self.send_message(chat_id, "⚠️ Число слишком большое (максимум 100). Попробуйте еще раз:")
+                return
+
+            if user_id in self._waiting_input:
+                inp_state = self._waiting_input.pop(user_id)
+                if inp_state.get("target") == "table":
+                    tbl_id = inp_state.get("table_id", "")
+                    tbl_name = tbl_id
+                    if self.supervisor:
+                        for t in self.supervisor.config.tables:
+                            if t.id == tbl_id:
+                                tbl_name = t.name
+                                break
+                        await self.supervisor.set_table_streak(tbl_id, val)
+                    await self.send_message(
+                        chat_id,
+                        f"✅ *Порог успешно установлен!*\nДля стола *{tbl_name}*: 🔥 *Игрок {val} побед подряд*."
+                    )
+                    await self._send_table_menu(chat_id, tbl_id)
+                else:
+                    if self.supervisor:
+                        await self.supervisor.set_global_streak(val)
+                    await self.send_message(
+                        chat_id,
+                        f"✅ *Порог успешно установлен!*\nДля *ВСЕХ столов*: 🔥 *Игрок {val} побед подряд*."
+                    )
+                    await self._send_all_tables_menu(chat_id)
+                return
+            else:
+                # Direct number sent without clicking input button
+                last_tbl = self._last_viewed_table.get(user_id)
+                kb_rows = [
+                    [{"text": f"🌐 Для ВСЕХ столов ({val} подряд)", "callback_data": f"s_all:{val}"}],
+                ]
+                if last_tbl:
+                    t_name = last_tbl
+                    if self.supervisor:
+                        for t in self.supervisor.config.tables:
+                            if t.id == last_tbl:
+                                t_name = t.name
+                                break
+                    kb_rows.append([{"text": f"🎯 Для стола {t_name} ({val} подряд)", "callback_data": f"st:{last_tbl}:{val}"}])
+                kb_rows.append([{"text": "📋 Выбрать другой стол", "callback_data": f"pick_tbl:{val}"}])
+                kb_rows.append([{"text": "❌ Отмена", "callback_data": "m:main"}])
+                await self.send_message(
+                    chat_id,
+                    f"🔢 Вы отправили число *{val}*.\nКуда вы хотите применить порог *Игрок {val} побед подряд*?",
+                    reply_markup={"inline_keyboard": kb_rows}
+                )
+                return
+
+        # 3. If user was in waiting mode and typed non-integer
+        if user_id in self._waiting_input:
+            await self.send_message(
+                chat_id,
+                "⚠️ Пожалуйста, отправьте целое число от *1 до N* (или отправьте /cancel для отмены):"
+            )
+            return
+
+        # 4. Standard commands
+        await self._send_main_menu(chat_id)
 
     # -------------------------------------------------------------------------
     # Callback Query Dispatcher (Button Clicks)
@@ -268,11 +352,14 @@ class TelegramAdminBot:
 
         # 1. Navigation / Menus
         if data == "m:main":
+            self._waiting_input.pop(user_id, None)
             await self.answer_callback(cq_id)
             await self._render_main_menu(chat_id, msg_id)
             return
 
         if data == "m:all":
+            self._waiting_input.pop(user_id, None)
+            self._last_viewed_table.pop(user_id, None)
             await self.answer_callback(cq_id)
             await self._render_all_tables_menu(chat_id, msg_id)
             return
@@ -290,8 +377,79 @@ class TelegramAdminBot:
 
         if data.startswith("t:"):
             table_id = data[2:]
+            self._waiting_input.pop(user_id, None)
+            self._last_viewed_table[user_id] = table_id
             await self.answer_callback(cq_id)
             await self._render_table_menu(chat_id, msg_id, table_id)
+            return
+
+        # 1.1 Input Mode Prompts
+        if data == "inp:all":
+            self._waiting_input[user_id] = {"target": "all"}
+            await self.answer_callback(cq_id)
+            text = (
+                "✏️ *Ввод порога для ВСЕХ столов*\n\n"
+                "Отправьте желаемое число побед подряд (*от 1 до N*, например: `1`, `5`, `12`, `20`) "
+                "сообщением в этот чат:"
+            )
+            kb = {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "cancel_inp:all"}]]}
+            await self.edit_message(chat_id, msg_id, text, reply_markup=kb)
+            return
+
+        if data.startswith("inp:t:"):
+            table_id = data[6:]
+            self._waiting_input[user_id] = {"target": "table", "table_id": table_id}
+            self._last_viewed_table[user_id] = table_id
+            await self.answer_callback(cq_id)
+            t_name = table_id
+            if self.supervisor:
+                for t in self.supervisor.config.tables:
+                    if t.id == table_id:
+                        t_name = t.name
+                        break
+            text = (
+                f"✏️ *Ввод персонального порога для стола*\n\n"
+                f"🎯 *Стол*: *{t_name}*\n\n"
+                "Отправьте желаемое число побед подряд (*от 1 до N*, например: `1`, `6`, `14`) "
+                "сообщением в этот чат:"
+            )
+            kb = {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": f"cancel_inp:t:{table_id}"}]]}
+            await self.edit_message(chat_id, msg_id, text, reply_markup=kb)
+            return
+
+        if data == "cancel_inp:all":
+            self._waiting_input.pop(user_id, None)
+            await self.answer_callback(cq_id, "Ввод отменен")
+            await self._render_all_tables_menu(chat_id, msg_id)
+            return
+
+        if data.startswith("cancel_inp:t:"):
+            table_id = data[13:]
+            self._waiting_input.pop(user_id, None)
+            await self.answer_callback(cq_id, "Ввод отменен")
+            await self._render_table_menu(chat_id, msg_id, table_id)
+            return
+
+        if data.startswith("pick_tbl:"):
+            streak_val = int(data.split(":")[1])
+            await self.answer_callback(cq_id)
+            tables = self.supervisor.config.tables if self.supervisor else []
+            rows = []
+            for i in range(0, len(tables), 2):
+                row = []
+                for t in tables[i : i + 2]:
+                    row.append({
+                        "text": t.name.replace("Speed Baccarat", "SB").replace("Baccarat", "Bacc"),
+                        "callback_data": f"st:{t.id}:{streak_val}",
+                    })
+                rows.append(row)
+            rows.append([{"text": "❌ Отмена", "callback_data": "m:main"}])
+            await self.edit_message(
+                chat_id,
+                msg_id,
+                f"🎯 Выберите стол для установки порога *Игрок {streak_val} побед подряд*:",
+                reply_markup={"inline_keyboard": rows}
+            )
             return
 
         # 2. Actions: Set Global Streak
@@ -424,29 +582,37 @@ class TelegramAdminBot:
         }
         return text, keyboard
 
-    async def _render_all_tables_menu(self, chat_id: int, message_id: int) -> None:
+    def _build_all_tables_payload(self) -> tuple[str, Dict[str, Any]]:
         global_streak = self._get_global_streak_info()
         text = (
             "⚙️ *Настройка порога для ВСЕХ столов*\n\n"
             f"Текущий глобальный порог: 🔥 *Игрок {global_streak} побед подряд*\n"
             "_Правило: ничья (Tie) игнорируется, сброс при победе Банкира._\n\n"
-            "Выберите после скольких побед Игрока присылать уведомление:"
+            "Выберите кнопку или *отправьте число от 1 до N сообщением в чат*:"
         )
 
-        # Streak options: 3, 4, 5, 6, 7, 8, 9, 10
         def btn(n: int):
             label = f"🔥 {n}" if n == global_streak else f"{n}"
             return {"text": f"{label} подряд", "callback_data": f"s_all:{n}"}
 
         keyboard = {
             "inline_keyboard": [
-                [btn(3), btn(4), btn(5)],
-                [btn(6), btn(7), btn(8)],
-                [btn(9), btn(10)],
+                [btn(1), btn(2), btn(3), btn(4)],
+                [btn(5), btn(6), btn(7), btn(8)],
+                [btn(9), btn(10), btn(12), btn(15)],
+                [{"text": "✏️ Ввести любое число (1 - N)", "callback_data": "inp:all"}],
                 [{"text": "⬅️ Назад в меню", "callback_data": "m:main"}],
             ]
         }
+        return text, keyboard
+
+    async def _render_all_tables_menu(self, chat_id: int, message_id: int) -> None:
+        text, keyboard = self._build_all_tables_payload()
         await self.edit_message(chat_id, message_id, text, reply_markup=keyboard)
+
+    async def _send_all_tables_menu(self, chat_id: int) -> None:
+        text, keyboard = self._build_all_tables_payload()
+        await self.send_message(chat_id, text, reply_markup=keyboard)
 
     async def _render_tables_list_menu(self, chat_id: int, message_id: int, page: int = 0) -> None:
         tables = self.supervisor.config.tables if self.supervisor else []
@@ -489,7 +655,7 @@ class TelegramAdminBot:
         keyboard = {"inline_keyboard": rows}
         await self.edit_message(chat_id, message_id, text, reply_markup=keyboard)
 
-    async def _render_table_menu(self, chat_id: int, message_id: int, table_id: str) -> None:
+    def _build_table_menu_payload(self, table_id: str) -> tuple[str, Dict[str, Any]]:
         table = None
         if self.supervisor:
             for t in self.supervisor.config.tables:
@@ -498,8 +664,7 @@ class TelegramAdminBot:
                     break
 
         if not table:
-            await self.edit_message(chat_id, message_id, f"Стол '{table_id}' не найден.")
-            return
+            return f"Стол '{table_id}' не найден.", {"inline_keyboard": [[{"text": "⬅️ К списку столов", "callback_data": "m:tables:0"}]]}
 
         global_streak = self._get_global_streak_info()
         custom_streak = self.supervisor.get_table_streak(table_id) if self.supervisor else None
@@ -517,7 +682,7 @@ class TelegramAdminBot:
             f"🆔 *ID*: `{table.id}`\n"
             f"🔥 *Текущий порог*: *Игрок {effective_streak} подряд* [{type_str}]\n"
             f"🔘 *Статус*: {status_str}\n\n"
-            "Выберите персональный порог побед Игрока:"
+            "Выберите кнопку или *отправьте число от 1 до N сообщением в чат*:"
         )
 
         def btn(n: int):
@@ -525,8 +690,10 @@ class TelegramAdminBot:
             return {"text": f"{mark}{n}", "callback_data": f"st:{table.id}:{n}"}
 
         keyboard_rows = [
-            [btn(3), btn(4), btn(5), btn(6)],
-            [btn(7), btn(8), btn(9), btn(10)],
+            [btn(1), btn(2), btn(3), btn(4)],
+            [btn(5), btn(6), btn(7), btn(8)],
+            [btn(9), btn(10), btn(12), btn(15)],
+            [{"text": "✏️ Ввести любое число (1 - N)", "callback_data": f"inp:t:{table.id}"}],
         ]
 
         # Reset button if custom rule exists
@@ -546,7 +713,15 @@ class TelegramAdminBot:
             {"text": "🏠 Главное меню", "callback_data": "m:main"},
         ])
 
-        await self.edit_message(chat_id, message_id, text, reply_markup={"inline_keyboard": keyboard_rows})
+        return text, {"inline_keyboard": keyboard_rows}
+
+    async def _render_table_menu(self, chat_id: int, message_id: int, table_id: str) -> None:
+        text, markup = self._build_table_menu_payload(table_id)
+        await self.edit_message(chat_id, message_id, text, reply_markup=markup)
+
+    async def _send_table_menu(self, chat_id: int, table_id: str) -> None:
+        text, markup = self._build_table_menu_payload(table_id)
+        await self.send_message(chat_id, text, reply_markup=markup)
 
     async def _render_status_menu(self, chat_id: int, message_id: int) -> None:
         if not self.supervisor:

@@ -395,9 +395,12 @@ class Supervisor:
                 global_rule = r
                 break
 
+        win_size = max(50, streak_val * 2)
         if global_rule:
             global_rule.levels = [RuleLevelConfig(at=streak_val, actions=["telegram"])]
             global_rule.name = f"Игрок {streak_val} победы подряд"
+            if isinstance(global_rule.condition, dict):
+                global_rule.condition["window"] = max(global_rule.condition.get("window", 30), win_size)
         else:
             new_rule = RuleConfig(
                 id="player_streak_all",
@@ -407,7 +410,7 @@ class Supervisor:
                 perspective="player",
                 tie_policy="ignore",
                 reset_on_shoe=True,
-                condition={"type": "streak", "of": "player", "window": 30},
+                condition={"type": "streak", "of": "player", "window": win_size},
                 levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
                 rearm="on_break",
             )
@@ -425,6 +428,7 @@ class Supervisor:
                 t_name = t.name
                 break
 
+        win_size = max(50, streak_val * 2)
         rule_id = f"player_streak_{table_id}"
         found = False
         for r in self.config.rules:
@@ -433,6 +437,8 @@ class Supervisor:
                 r.name = f"Игрок {streak_val} подряд [{t_name}]"
                 r.tables = [table_id]
                 r.enabled = True
+                if isinstance(r.condition, dict):
+                    r.condition["window"] = max(r.condition.get("window", 30), win_size)
                 found = True
                 break
 
@@ -445,7 +451,7 @@ class Supervisor:
                 perspective="player",
                 tie_policy="ignore",
                 reset_on_shoe=True,
-                condition={"type": "streak", "of": "player", "window": 30},
+                condition={"type": "streak", "of": "player", "window": win_size},
                 levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
                 rearm="on_break",
             )

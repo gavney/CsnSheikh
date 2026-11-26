@@ -252,3 +252,164 @@ async def test_admin_bot_toggle_table(mock_supervisor):
 
     await bot._handle_callback_query(cq)
     assert mock_supervisor.config.tables[0].enabled is True
+
+
+@pytest.mark.asyncio
+async def test_admin_bot_manual_number_input_all_tables(mock_supervisor):
+    """Verify entering an arbitrary number from 1 to N for all tables."""
+    bot = TelegramAdminBot(
+        bot_token="test_token",
+        supervisor=mock_supervisor,
+    )
+    bot.send_message = AsyncMock()
+    bot.edit_message = AsyncMock()
+    bot.answer_callback = AsyncMock()
+    bot._auth_sessions.add(999)
+
+    # 1. User clicks button to enter custom number for all tables
+    cq = {
+        "id": "cq_inp_all",
+        "from": {"id": 999},
+        "message": {"message_id": 20, "chat": {"id": 999}},
+        "data": "inp:all",
+    }
+    await bot._handle_callback_query(cq)
+    assert 999 in bot._waiting_input
+    assert bot._waiting_input[999]["target"] == "all"
+    bot.edit_message.assert_called()
+
+    # 2. User sends number '14' in chat
+    msg = {
+        "message_id": 21,
+        "chat": {"id": 999, "type": "private"},
+        "from": {"id": 999},
+        "text": "14",
+    }
+    await bot._handle_message(msg)
+    assert 999 not in bot._waiting_input
+    assert mock_supervisor.get_global_streak() == 14
+    assert mock_supervisor.config.rules[0].levels[0].at == 14
+    # Condition window should be scaled
+    assert mock_supervisor.config.rules[0].condition["window"] >= 30
+
+
+@pytest.mark.asyncio
+async def test_admin_bot_manual_number_input_specific_table(mock_supervisor):
+    """Verify entering an arbitrary number from 1 to N for a specific table."""
+    bot = TelegramAdminBot(
+        bot_token="test_token",
+        supervisor=mock_supervisor,
+    )
+    bot.send_message = AsyncMock()
+    bot.edit_message = AsyncMock()
+    bot.answer_callback = AsyncMock()
+    bot._auth_sessions.add(999)
+
+    # 1. User clicks button to enter custom number for table 't1'
+    cq = {
+        "id": "cq_inp_t1",
+        "from": {"id": 999},
+        "message": {"message_id": 22, "chat": {"id": 999}},
+        "data": "inp:t:t1",
+    }
+    await bot._handle_callback_query(cq)
+    assert 999 in bot._waiting_input
+    assert bot._waiting_input[999]["target"] == "table"
+    assert bot._waiting_input[999]["table_id"] == "t1"
+
+    # 2. User sends number '1' in chat (1 win threshold)
+    msg = {
+        "message_id": 23,
+        "chat": {"id": 999, "type": "private"},
+        "from": {"id": 999},
+        "text": "1",
+    }
+    await bot._handle_message(msg)
+    assert 999 not in bot._waiting_input
+    assert mock_supervisor.get_table_streak("t1") == 1
+    assert mock_supervisor.get_global_streak() == 4  # Global remains unchanged
+
+
+@pytest.mark.asyncio
+async def test_admin_bot_direct_number_interactive_prompt(mock_supervisor):
+    """Verify sending a number directly without entering input mode first."""
+    bot = TelegramAdminBot(
+        bot_token="test_token",
+        supervisor=mock_supervisor,
+    )
+    bot.send_message = AsyncMock()
+    bot._auth_sessions.add(999)
+    bot._last_viewed_table[999] = "t2"
+
+    # User simply sends '8'
+    msg = {
+        "message_id": 24,
+        "chat": {"id": 999, "type": "private"},
+        "from": {"id": 999},
+        "text": "8",
+    }
+    await bot._handle_message(msg)
+    bot.send_message.assert_called()
+    call_args = bot.send_message.call_args[0]
+    assert "Вы отправили число *8*" in call_args[1]
+    reply_markup = bot.send_message.call_args[1]["reply_markup"]
+    assert any("s_all:8" in btn["callback_data"] for row in reply_markup["inline_keyboard"] for btn in row)
+    assert any("st:t2:8" in btn["callback_data"] for row in reply_markup["inline_keyboard"] for btn in row)
+
+
+@pytest.mark.asyncio
+async def test_admin_bot_input_cancellation(mock_supervisor):
+    """Verify input cancellation via /cancel command and callback query."""
+    bot = TelegramAdminBot(
+        bot_token="test_token",
+        supervisor=mock_supervisor,
+    )
+    bot.send_message = AsyncMock()
+    bot.edit_message = AsyncMock()
+    bot.answer_callback = AsyncMock()
+    bot._auth_sessions.add(999)
+
+    # 1. Set waiting input
+    bot._waiting_input[999] = {"target": "all"}
+    msg_cancel = {
+        "message_id": 25,
+        "chat": {"id": 999, "type": "private"},
+        "from": {"id": 999},
+        "text": "/cancel",
+    }
+    await bot._handle_message(msg_cancel)
+    assert 999 not in bot._waiting_input
+    bot.send_message.assert_called()
+
+    # 2. Cancel via callback query
+    bot._waiting_input[999] = {"target": "table", "table_id": "t1"}
+    cq_cancel = {
+        "id": "cq_canc",
+        "from": {"id": 999},
+        "message": {"message_id": 26, "chat": {"id": 999}},
+        "data": "cancel_inp:t:t1",
+    }
+    await bot._handle_callback_query(cq_cancel)
+    assert 999 not in bot._waiting_input
+
+
+@pytest.mark.asyncio
+async def test_admin_bot_invalid_number_validation(mock_supervisor):
+    """Verify rejection of non-positive numbers or values exceeding maximum."""
+    bot = TelegramAdminBot(
+        bot_token="test_token",
+        supervisor=mock_supervisor,
+    )
+    bot.send_message = AsyncMock()
+    bot._auth_sessions.add(999)
+    bot._waiting_input[999] = {"target": "all"}
+
+    # 1. 0 is rejected
+    await bot._handle_message({"message_id": 27, "chat": {"id": 999, "type": "private"}, "from": {"id": 999}, "text": "0"})
+    assert 999 in bot._waiting_input  # Still waiting
+    assert "не меньше 1" in bot.send_message.call_args[0][1]
+
+    # 2. Non-numeric text
+    await bot._handle_message({"message_id": 28, "chat": {"id": 999, "type": "private"}, "from": {"id": 999}, "text": "abc"})
+    assert 999 in bot._waiting_input
+    assert "целое число" in bot.send_message.call_args[0][1]
