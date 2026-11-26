@@ -19,7 +19,7 @@ from src.state.reconciler import Reconciler
 from src.state.window import SlidingWindow
 from src.store.db import Database
 from src.store.repository import AlertRepository, RoundRepository, RuleStateRepository
-from src.utils.logging import get_logger
+from src.utils.logging import get_logger, mask_token
 
 logger = get_logger("supervisor")
 
@@ -509,10 +509,10 @@ class Supervisor:
                     user_data_dir=self.config.session.browser_profile_dir,
                     headless=self.config.session.headless,
                     table_url_map=table_urls if table_urls else None,
+                    proxy=self.config.session.proxy,
                 )
                 refreshed = await temp_provider.get_session(target_table_id, force_refresh=True)
                 await temp_provider.close()
-            from src.utils.logging import mask_token
             text = (
                 f"🔄 *РУЧНОЕ ОБНОВЛЕНИЕ ТОКЕНА ВЫПОЛНЕНО*\n"
                 f"🔑 Новый токен: `{mask_token(refreshed.jsessionid)}`\n"
