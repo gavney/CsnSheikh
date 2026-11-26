@@ -117,7 +117,7 @@ async def run_supervisor(
 
 
 async def manual_login(
-    url: str = "https://1xbet.fi/ru/casino/brand?game=122197",
+    url: str = "https://1xlite-32085.pro/ru/casino/brand?game=122197",
     profile_dir: Path = Path("./browser_profile")
 ) -> None:
     """Open a headed browser window for manual login and automatic token interception."""
@@ -412,7 +412,7 @@ def main():
 
     # 'login' command
     login_parser = subparsers.add_parser("login", help="Open browser to log in manually and persist session in browser_profile")
-    login_parser.add_argument("--url", default="https://1xbet.fi/ru/casino/brand?game=122197", help="Portal URL to open for login")
+    login_parser.add_argument("--url", default="https://1xlite-32085.pro/ru/casino/brand?game=122197", help="Portal URL to open for login")
 
     # 'test-notify' command
     notify_parser = subparsers.add_parser("test-notify", help="Send test alert to verify Telegram/Console delivery")

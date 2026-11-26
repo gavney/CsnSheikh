@@ -15,20 +15,20 @@ DEFAULT_CACHE_PATH = Path(".session_cache.json")
 
 # Known game URLs on the casino portal
 TABLE_URL_MAP = {
-    "bc281koreanch281": "https://1xbet.fi/ru/casino/brand?game=68018",
-    "kkqnazmd8ttq7fgd": "https://1xbet.fi/ru/casino/brand?game=51523",
-    "oq808ojps709qqaf": "https://1xbet.fi/ru/casino/brand?game=59580",
-    "tobc51koreanto51": "https://1xbet.fi/ru/casino/brand?game=81262",
-    "bc392chromabc392": "https://1xbet.fi/ru/casino/brand?game=122203",
-    "speedbca18generi": "https://1xbet.fi/ru/casino/brand?game=81947",
-    "speedbca14gesbc1": "https://1xbet.fi/ru/casino/brand?game=85635",
-    "spto41bctorobc41": "https://1xbet.fi/ru/casino/brand?game=93989",
-    "spto42bctorobc42": "https://1xbet.fi/ru/casino/brand?game=93990",
-    "spijbnsu408vmv71": "https://1xbet.fi/ru/casino/brand?game=94056",
-    "spijbnsu408vmv72": "https://1xbet.fi/ru/casino/brand?game=94059",
-    "spto11bctorobc11": "https://1xbet.fi/ru/casino/brand?game=94375",
-    "m88hicogrzeod202": "https://1xbet.fi/ru/casino/brand?game=124383",
-    "spijbnsu408vmv73": "https://1xbet.fi/ru/casino/brand?game=122197",
+    "bc281koreanch281": "https://1xlite-32085.pro/ru/casino/brand?game=68018",
+    "kkqnazmd8ttq7fgd": "https://1xlite-32085.pro/ru/casino/brand?game=51523",
+    "oq808ojps709qqaf": "https://1xlite-32085.pro/ru/casino/brand?game=59580",
+    "tobc51koreanto51": "https://1xlite-32085.pro/ru/casino/brand?game=81262",
+    "bc392chromabc392": "https://1xlite-32085.pro/ru/casino/brand?game=122203",
+    "speedbca18generi": "https://1xlite-32085.pro/ru/casino/brand?game=81947",
+    "speedbca14gesbc1": "https://1xlite-32085.pro/ru/casino/brand?game=85635",
+    "spto41bctorobc41": "https://1xlite-32085.pro/ru/casino/brand?game=93989",
+    "spto42bctorobc42": "https://1xlite-32085.pro/ru/casino/brand?game=93990",
+    "spijbnsu408vmv71": "https://1xlite-32085.pro/ru/casino/brand?game=94056",
+    "spijbnsu408vmv72": "https://1xlite-32085.pro/ru/casino/brand?game=94059",
+    "spto11bctorobc11": "https://1xlite-32085.pro/ru/casino/brand?game=94375",
+    "m88hicogrzeod202": "https://1xlite-32085.pro/ru/casino/brand?game=124383",
+    "spijbnsu408vmv73": "https://1xlite-32085.pro/ru/casino/brand?game=122197",
 }
 
 
