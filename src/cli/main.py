@@ -136,6 +136,13 @@ async def manual_login(
             launch_proxy = await bridge.start()
 
     profile_dir.mkdir(parents=True, exist_ok=True)
+    for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        lock_file = profile_dir / lock_name
+        if lock_file.exists() or lock_file.is_symlink():
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
     print("\n" + "=" * 70)
     print("ВХОД В АККАУНТ И АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ТОКЕНА")
     print(f"Открытие браузера: {url}")
@@ -167,14 +174,19 @@ async def manual_login(
             def handle_request(req):
                 nonlocal captured_count
                 url_str = req.url
-                if "JSESSIONID=" in url_str and ("/game?" in url_str or "/desktop/launcher/?" in url_str):
+                if "JSESSIONID=" in url_str and ("/game?" in url_str or "/desktop/launcher/?" in url_str or "pragmatic" in url_str):
                     parsed = urlparse(url_str)
                     qs = parse_qs(parsed.query)
                     token = qs.get("JSESSIONID", [""])[0]
                     tbl = qs.get("tableId", [""])[0] or qs.get("table_id", [""])[0] or "bc281koreanch281"
                     server = qs.get("socket_server", [""])[0]
-                    if not server and "/game?" in url_str:
-                        server = f"wss://{parsed.netloc}"
+                    if not server:
+                        if "/game" in url_str:
+                            server = f"wss://{parsed.netloc}"
+                        else:
+                            server = "wss://gs24.pragmaticplaylive.net"
+                    if server.endswith("/game"):
+                        server = server[:-5]
                     origin = req.headers.get("origin") or f"https://client.{parsed.netloc.split('.', 1)[-1]}"
                     if token and server:
                         captured_count += 1

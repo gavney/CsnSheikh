@@ -127,6 +127,13 @@ class PlaywrightSessionProvider(SessionProvider):
         from playwright.async_api import async_playwright
 
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
+        for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+            lock_file = self.user_data_dir / lock_name
+            if lock_file.exists() or lock_file.is_symlink():
+                try:
+                    lock_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         launch_proxy = self.proxy
         if launch_proxy and ("socks5://" in launch_proxy or "socks5h://" in launch_proxy):
