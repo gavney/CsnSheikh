@@ -736,9 +736,16 @@ class TelegramAdminBot:
 
         now = time.time()
         for t in self.supervisor.config.tables:
-            status_dot = "🟢" if t.enabled else "🔴"
             client = self.supervisor.clients.get(t.id)
-            conn_txt = "online" if (client and client.is_connected) else ("active" if t.enabled else "off")
+            if client and client.is_connected:
+                status_dot = "🟢"
+                conn_txt = "online"
+            elif t.enabled:
+                status_dot = "🟡"
+                conn_txt = "connecting"
+            else:
+                status_dot = "🔴"
+                conn_txt = "off"
             custom = self.supervisor.get_table_streak(t.id)
             streak_txt = f"{custom}🔥" if custom else f"{global_streak}"
             window = self.supervisor.windows.get(t.id)

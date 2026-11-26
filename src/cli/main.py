@@ -197,8 +197,19 @@ async def manual_login(
                             client_origin=origin,
                         )
                         save_session_to_cache(sess)
+                        # Universal session: propagate token to all configured tables
+                        from src.session.browser import TABLE_URL_MAP
+                        for other_tid in TABLE_URL_MAP:
+                            if other_tid != tbl:
+                                other_sess = SessionInfo(
+                                    jsessionid=token,
+                                    socket_server=server,
+                                    table_id=other_tid,
+                                    client_origin=origin,
+                                )
+                                save_session_to_cache(other_sess)
                         print("\n" + "*" * 65)
-                        print("🔥 [УСПЕХ] Токен автоматически перехвачен и сохранен!")
+                        print("🔥 [УСПЕХ] Токен автоматически перехвачен и сохранен для ВСЕХ столов!")
                         print(f"   Стол          : {tbl}")
                         print(f"   Сервер        : {server}")
                         print(f"   JSESSIONID    : {token[:8]}...{token[-6:]}")

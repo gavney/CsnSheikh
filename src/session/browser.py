@@ -233,7 +233,7 @@ class PlaywrightSessionProvider(SessionProvider):
 
                 # Wait for token capture
                 try:
-                    await asyncio.wait_for(extracted_event.wait(), timeout=60.0)
+                    await asyncio.wait_for(extracted_event.wait(), timeout=90.0)
                 except asyncio.TimeoutError:
                     raise TimeoutError(
                         f"Timeout waiting for game session tokens on '{target_url}'. "

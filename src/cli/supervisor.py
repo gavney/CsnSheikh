@@ -388,40 +388,48 @@ class Supervisor:
         return None
 
     async def set_global_streak(self, streak_val: int) -> None:
-        """Update or create the global streak rule, persist to YAML and hot-reload."""
-        global_rule = None
+        """Update or create the global Player streak rule, persist to YAML and hot-reload."""
+        win_size = max(50, streak_val * 2)
+
+        # Clean up any leftover banker rules
+        self.config.rules = [
+            r for r in self.config.rules
+            if not (r.condition.get("of") == "banker" or "banker" in getattr(r, "id", ""))
+        ]
+
+        player_rule = None
         for r in self.config.rules:
-            if r.tables == "all" and r.condition.get("of") == "player":
-                global_rule = r
+            if r.tables == "all" and (getattr(r, "id", "") == "player_streak_all" or r.condition.get("of") == "player"):
+                player_rule = r
                 break
 
-        win_size = max(50, streak_val * 2)
-        if global_rule:
-            global_rule.levels = [RuleLevelConfig(at=streak_val, actions=["telegram"])]
-            global_rule.name = f"Игрок {streak_val} победы подряд"
-            if isinstance(global_rule.condition, dict):
-                global_rule.condition["window"] = max(global_rule.condition.get("window", 30), win_size)
+        if player_rule:
+            player_rule.levels = [RuleLevelConfig(at=streak_val, actions=["telegram"])]
+            player_rule.name = f"Игрок {streak_val} побед подряд"
+            if isinstance(player_rule.condition, dict):
+                player_rule.condition["window"] = max(player_rule.condition.get("window", 30), win_size)
         else:
-            new_rule = RuleConfig(
-                id="player_streak_all",
-                name=f"Игрок {streak_val} победы подряд",
-                enabled=True,
-                tables="all",
-                perspective="player",
-                tie_policy="ignore",
-                reset_on_shoe=True,
-                condition={"type": "streak", "of": "player", "window": win_size},
-                levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
-                rearm="on_break",
+            self.config.rules.append(
+                RuleConfig(
+                    id="player_streak_all",
+                    name=f"Игрок {streak_val} побед подряд",
+                    enabled=True,
+                    tables="all",
+                    perspective="player",
+                    tie_policy="ignore",
+                    reset_on_shoe=True,
+                    condition={"type": "streak", "of": "player", "window": win_size},
+                    levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
+                    rearm="on_break",
+                )
             )
-            self.config.rules.append(new_rule)
 
         cfg_p = getattr(self, "config_path", Path("config.yaml"))
         save_config(self.config, cfg_p)
         await self.reload_rules(self.config.rules)
 
     async def set_table_streak(self, table_id: str, streak_val: int) -> None:
-        """Set individual streak threshold for a specific table, persist and hot-reload."""
+        """Set individual Player streak threshold for a specific table, persist and hot-reload."""
         t_name = table_id
         for t in self.config.tables:
             if t.id == table_id:
@@ -429,33 +437,41 @@ class Supervisor:
                 break
 
         win_size = max(50, streak_val * 2)
-        rule_id = f"player_streak_{table_id}"
-        found = False
+
+        # Clean up any leftover banker rule for this table
+        self.config.rules = [
+            r for r in self.config.rules
+            if not ((r.tables == [table_id] or getattr(r, "id", "") == f"banker_streak_{table_id}") and (r.condition.get("of") == "banker" or "banker" in getattr(r, "id", "")))
+        ]
+
+        p_rule_id = f"player_streak_{table_id}"
+        p_found = False
         for r in self.config.rules:
-            if r.id == rule_id or r.tables == [table_id]:
+            if r.id == p_rule_id or (r.tables == [table_id] and r.condition.get("of") == "player"):
                 r.levels = [RuleLevelConfig(at=streak_val, actions=["telegram"])]
                 r.name = f"Игрок {streak_val} подряд [{t_name}]"
                 r.tables = [table_id]
                 r.enabled = True
                 if isinstance(r.condition, dict):
                     r.condition["window"] = max(r.condition.get("window", 30), win_size)
-                found = True
+                p_found = True
                 break
 
-        if not found:
-            new_rule = RuleConfig(
-                id=rule_id,
-                name=f"Игрок {streak_val} подряд [{t_name}]",
-                enabled=True,
-                tables=[table_id],
-                perspective="player",
-                tie_policy="ignore",
-                reset_on_shoe=True,
-                condition={"type": "streak", "of": "player", "window": win_size},
-                levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
-                rearm="on_break",
+        if not p_found:
+            self.config.rules.append(
+                RuleConfig(
+                    id=p_rule_id,
+                    name=f"Игрок {streak_val} подряд [{t_name}]",
+                    enabled=True,
+                    tables=[table_id],
+                    perspective="player",
+                    tie_policy="ignore",
+                    reset_on_shoe=True,
+                    condition={"type": "streak", "of": "player", "window": win_size},
+                    levels=[RuleLevelConfig(at=streak_val, actions=["telegram"])],
+                    rearm="on_break",
+                )
             )
-            self.config.rules.append(new_rule)
 
         cfg_p = getattr(self, "config_path", Path("config.yaml"))
         save_config(self.config, cfg_p)
