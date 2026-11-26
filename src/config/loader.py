@@ -68,15 +68,22 @@ def load_config(
         if v:
             data[k] = v
 
-    # Propagate socks5_proxy to connection and session if not explicitly set
-    app_proxy = data.get("socks5_proxy")
-    if app_proxy:
+    # Propagate socks5_proxy to connection and session
+    if proxy_val:
         conn = data.setdefault("connection", {})
-        if not conn.get("proxy"):
-            conn["proxy"] = app_proxy
+        conn["proxy"] = proxy_val
         sess = data.setdefault("session", {})
-        if not sess.get("proxy"):
-            sess["proxy"] = app_proxy
+        sess["proxy"] = proxy_val
+    else:
+        app_proxy = data.get("socks5_proxy") or data.get("connection", {}).get("proxy") or data.get("session", {}).get("proxy")
+        if app_proxy:
+            data.setdefault("socks5_proxy", app_proxy)
+            conn = data.setdefault("connection", {})
+            if not conn.get("proxy"):
+                conn["proxy"] = app_proxy
+            sess = data.setdefault("session", {})
+            if not sess.get("proxy"):
+                sess["proxy"] = app_proxy
 
     return AppConfig.model_validate(data)
 
