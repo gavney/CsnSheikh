@@ -26,11 +26,21 @@ run:
 status:
 	python3 -m src.cli status --config config.yaml --env .env
 
+SERVER ?= root@srv823908
+
 login:
 	python3 -m src.cli login
 
 login-direct:
 	python3 -m src.cli login --no-proxy
+
+login-remote:
+	@echo "Opening login browser locally on your desktop..."
+	python3 -m src.cli login --no-proxy
+	@echo "Syncing session cache to $(SERVER)..."
+	scp .session_cache.json $(SERVER):~/vktg/Casino/
+	ssh $(SERVER) "systemctl restart casino"
+	@echo "Done! Service restarted on $(SERVER)."
 
 get-token:
 	python3 -m src.cli get-token --table bc281koreanch281

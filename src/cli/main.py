@@ -296,24 +296,41 @@ async def fetch_and_save_token(
 
 def set_manual_token(
     token: str,
-    server: str = "wss://gs24.pplcru001.net",
+    server: str = "wss://gs23.pplcru001.net",
     table_id: str = "bc281koreanch281",
     origin: str = "https://client.pplcru001.net",
 ) -> None:
-    """Manually register a token into local session cache."""
-    sess = SessionInfo(
-        jsessionid=token,
-        socket_server=server,
-        table_id=table_id,
-        client_origin=origin,
-    )
-    save_session_to_cache(sess)
+    """Manually register a token into local session cache for ALL tables."""
+    from src.session.browser import TABLE_URL_MAP
+    from urllib.parse import urlparse, parse_qs
+
+    token_str = token.strip()
+    if "JSESSIONID=" in token_str or token_str.startswith("wss://") or token_str.startswith("ws://"):
+        parsed = urlparse(token_str)
+        qs = parse_qs(parsed.query)
+        extracted = qs.get("JSESSIONID", [""])[0]
+        if extracted:
+            token_str = extracted
+        if parsed.netloc:
+            server = f"wss://{parsed.netloc}"
+
+    if server.endswith("/game"):
+        server = server[:-5]
+
+    for tid in TABLE_URL_MAP:
+        sess = SessionInfo(
+            jsessionid=token_str,
+            socket_server=server,
+            table_id=tid,
+            client_origin=origin,
+        )
+        save_session_to_cache(sess)
+
     print("\n" + "=" * 60)
-    print("ТОКЕН УСПЕШНО СОХРАНЕН ВРУЧНУЮ:")
-    print(f"  Table ID      : {table_id}")
+    print("🔥 ТОКЕН УСПЕШНО СОХРАНЕН ДЛЯ ВСЕХ 14 СТОЛОВ:")
     print(f"  Socket Server : {server}")
     print(f"  Origin        : {origin}")
-    print(f"  JSESSIONID    : {token[:8]}...{token[-6:]}")
+    print(f"  JSESSIONID    : {token_str[:8]}...{token_str[-6:]}")
     print("  Кэш сохранен  : .session_cache.json")
     print("=" * 60 + "\n")
 

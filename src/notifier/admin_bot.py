@@ -246,14 +246,61 @@ class TelegramAdminBot:
         if text.lower() in ("/cancel", "отмена", "cancel"):
             inp_state = self._waiting_input.pop(user_id, None)
             if inp_state:
-                await self.send_message(chat_id, "❌ Ввод числа отменен.")
+                await self.send_message(chat_id, "❌ Действие отменено.")
                 if inp_state.get("target") == "table" and "table_id" in inp_state:
                     await self._send_table_menu(chat_id, inp_state["table_id"])
+                elif inp_state.get("target") == "token":
+                    await self._send_main_menu(chat_id)
                 else:
                     await self._send_all_tables_menu(chat_id)
             else:
                 await self._send_main_menu(chat_id)
             return
+
+        # 1.1 Handle token input (manual JSESSIONID or full websocket URL)
+        is_token_input = (user_id in self._waiting_input and self._waiting_input[user_id].get("target") == "token")
+        has_token_pattern = ("JSESSIONID=" in text) or ("wss://" in text and "gs" in text) or (len(text) > 30 and ("!" in text or "-" in text) and " " not in text)
+
+        if is_token_input or has_token_pattern:
+            self._waiting_input.pop(user_id, None)
+            parsed_token = None
+            parsed_server = "wss://gs23.pplcru001.net/game"
+
+            if "JSESSIONID=" in text:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(text)
+                qs = parse_qs(parsed.query)
+                parsed_token = qs.get("JSESSIONID", [""])[0]
+                if parsed.netloc:
+                    parsed_server = f"wss://{parsed.netloc}/game"
+            elif text.startswith("wss://") or text.startswith("ws://"):
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(text)
+                qs = parse_qs(parsed.query)
+                parsed_token = qs.get("JSESSIONID", [""])[0]
+                if parsed.netloc:
+                    parsed_server = f"wss://{parsed.netloc}/game"
+            else:
+                parsed_token = text.strip()
+
+            if parsed_token and len(parsed_token) > 15:
+                if self.supervisor:
+                    await self.supervisor.apply_manual_token(parsed_token, parsed_server)
+                await self.send_message(
+                    chat_id,
+                    f"🔥 *Токен успешно сохранен и применен для всех столов!*\n\n"
+                    f"🔑 *Токен*: `{parsed_token[:8]}...{parsed_token[-6:]}`\n"
+                    f"🌐 *Сервер*: `{parsed_server}`\n\n"
+                    f"Столы автоматически переподключаются к трансляции."
+                )
+                await self._send_main_menu(chat_id)
+                return
+            elif is_token_input:
+                await self.send_message(
+                    chat_id,
+                    "⚠️ Не удалось распознать токен. Отправьте значение `JSESSIONID` или полную ссылку `wss://...` (или /cancel для отмены):"
+                )
+                return
 
         # 2. Handle number input (1 to N)
         try:
@@ -521,6 +568,19 @@ class TelegramAdminBot:
             await self.answer_callback(cq_id, "🔄 Запущен фоновый процесс обновления токена сессии!", alert=True)
             return
 
+        if data == "act:input_token":
+            self._waiting_input[user_id] = {"target": "token"}
+            await self.answer_callback(cq_id)
+            text = (
+                "🔑 *Ввод токена JSESSIONID вручную*\n\n"
+                "Вы можете скопировать токен из вашего обычного браузера на компьютере или телефоне "
+                "(через F12 ➔ Network ➔ фильтр `game` / `wss` ➔ значение `JSESSIONID` или скопируйте весь URL `wss://...`).\n\n"
+                "Отправьте сюда значение токена или ссылку `wss://...`:"
+            )
+            kb = {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "m:main"}]]}
+            await self.edit_message(chat_id, msg_id, text, reply_markup=kb)
+            return
+
         if data == "act:logout":
             self._auth_sessions.discard(user_id)
             await self.answer_callback(cq_id, "Сессия завершена.")
@@ -573,9 +633,10 @@ class TelegramAdminBot:
                 ],
                 [
                     {"text": "📊 Статус мониторинга", "callback_data": "act:status"},
-                    {"text": "🔄 Обновить токен", "callback_data": "act:refresh"},
+                    {"text": "🔑 Вставить токен", "callback_data": "act:input_token"},
                 ],
                 [
+                    {"text": "🔄 Фоновый рефреш", "callback_data": "act:refresh"},
                     {"text": "🔒 Завершить сеанс", "callback_data": "act:logout"},
                 ],
             ]

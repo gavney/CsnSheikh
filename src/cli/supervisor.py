@@ -371,6 +371,42 @@ class Supervisor:
         await self.session_provider.close()
         logger.info("Supervisor stopped successfully.")
 
+    async def apply_manual_token(
+        self,
+        token: str,
+        server: str = "wss://gs23.pplcru001.net/game",
+        origin: str = "https://client.pplcru001.net",
+    ) -> None:
+        """Apply manual token to session cache, memory and reconnect all table clients."""
+        from src.session.browser import TABLE_URL_MAP, save_session_to_cache
+        from src.session.models import SessionInfo
+
+        clean_server = server
+        if clean_server.endswith("/game"):
+            clean_server = clean_server[:-5]
+
+        # Update cache on disk and in memory
+        for t in self.config.tables:
+            sess = SessionInfo(
+                jsessionid=token,
+                socket_server=clean_server,
+                table_id=t.id,
+                client_origin=origin,
+            )
+            save_session_to_cache(sess)
+            if hasattr(self.session_provider, "_cached_sessions"):
+                self.session_provider._cached_sessions[t.id] = sess
+        if hasattr(self.session_provider, "_last_refresh_time"):
+            self.session_provider._last_refresh_time = time.time()
+
+        logger.info("Applied manual token across all tables. Reconnecting active WebSocket clients...")
+        for client in self.clients.values():
+            if client._ws:
+                try:
+                    await client._ws.close()
+                except Exception:
+                    pass
+
     def get_global_streak(self) -> int:
         """Get the current global Player streak threshold."""
         for r in self.config.rules:
