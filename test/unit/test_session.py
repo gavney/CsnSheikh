@@ -33,3 +33,40 @@ async def test_env_session_provider():
     assert s1.table_id == "bc281koreanch281"
 
     await provider.close()
+
+
+def test_build_playwright_proxy():
+    from src.session.browser import build_playwright_proxy
+
+    # None or empty
+    assert build_playwright_proxy(None) is None
+    assert build_playwright_proxy("") is None
+
+    # SOCKS5 without auth
+    p1 = build_playwright_proxy("socks5://127.0.0.1:10808")
+    assert p1 == {"server": "socks5://127.0.0.1:10808"}
+
+    # SOCKS5 with auth
+    p2 = build_playwright_proxy("socks5://admin:secret123@1.2.3.4:9050")
+    assert p2 == {
+        "server": "socks5://1.2.3.4:9050",
+        "username": "admin",
+        "password": "secret123",
+    }
+
+
+def test_load_config_separate_proxy_env(monkeypatch):
+    import os
+    from src.config.loader import load_config
+    from pathlib import Path
+
+    monkeypatch.delenv("SOCKS5_PROXY", raising=False)
+    monkeypatch.setenv("SOCKS5_HOST", "10.0.0.1")
+    monkeypatch.setenv("SOCKS5_PORT", "1080")
+    monkeypatch.setenv("SOCKS5_USER", "admin")
+    monkeypatch.setenv("SOCKS5_PASSWORD", "pass@123")
+
+    cfg = load_config(Path("config.yaml"), env_path=Path("nonexistent.env"))
+    assert cfg.socks5_proxy == "socks5://admin:pass%40123@10.0.0.1:1080"
+    assert cfg.connection.proxy == "socks5://admin:pass%40123@10.0.0.1:1080"
+    assert cfg.session.proxy == "socks5://admin:pass%40123@10.0.0.1:1080"

@@ -83,6 +83,7 @@ async def run_supervisor(
         session_provider = PlaywrightSessionProvider(
             user_data_dir=config.session.browser_profile_dir,
             headless=config.session.headless,
+            proxy=config.session.proxy,
         )
     else:
         session_provider = EnvSessionProvider(
@@ -118,16 +119,29 @@ async def run_supervisor(
 
 async def manual_login(
     url: str = "https://1xlite-32085.pro/ru/casino/brand?game=122197",
-    profile_dir: Path = Path("./browser_profile")
+    profile_dir: Path = Path("./browser_profile"),
+    proxy: Optional[str] = None,
 ) -> None:
     """Open a headed browser window for manual login and automatic token interception."""
     from playwright.async_api import async_playwright
+    from src.session.browser import build_playwright_proxy
+
+    bridge = None
+    launch_proxy = proxy
+    if launch_proxy and ("socks5://" in launch_proxy or "socks5h://" in launch_proxy):
+        parsed = urlparse(launch_proxy)
+        if parsed.username or parsed.password:
+            from src.session.proxy_bridge import LocalSocks5Bridge
+            bridge = LocalSocks5Bridge(launch_proxy)
+            launch_proxy = await bridge.start()
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     print("\n" + "=" * 70)
     print("ВХОД В АККАУНТ И АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ ТОКЕНА")
     print(f"Открытие браузера: {url}")
     print(f"Каталог профиля  : {profile_dir.resolve()}")
+    if proxy:
+        print(f"Прокси браузера  : {proxy}")
     print("=" * 70)
     print("1. В открывшемся окне выполните вход в аккаунт.")
     print("2. Перейдите на любой стол Live Baccarat (например, Speed Baccarat).")
@@ -137,52 +151,75 @@ async def manual_login(
 
     captured_count = 0
 
-    async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            headless=False,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
-        )
+    try:
+        async with async_playwright() as p:
+            proxy_settings = build_playwright_proxy(launch_proxy)
+            launch_kwargs = {
+                "user_data_dir": str(profile_dir),
+                "headless": False,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+            }
+            if proxy_settings:
+                launch_kwargs["proxy"] = proxy_settings
 
-        def handle_request(req):
-            nonlocal captured_count
-            url_str = req.url
-            if "JSESSIONID=" in url_str and ("/game?" in url_str or "/desktop/launcher/?" in url_str):
-                parsed = urlparse(url_str)
-                qs = parse_qs(parsed.query)
-                token = qs.get("JSESSIONID", [""])[0]
-                tbl = qs.get("tableId", [""])[0] or qs.get("table_id", [""])[0] or "bc281koreanch281"
-                server = qs.get("socket_server", [""])[0]
-                if not server and "/game?" in url_str:
-                    server = f"wss://{parsed.netloc}"
-                origin = req.headers.get("origin") or f"https://client.{parsed.netloc.split('.', 1)[-1]}"
-                if token and server:
-                    captured_count += 1
-                    sess = SessionInfo(
-                        jsessionid=token,
-                        socket_server=server,
-                        table_id=tbl,
-                        client_origin=origin,
-                    )
-                    save_session_to_cache(sess)
-                    print("\n" + "*" * 65)
-                    print("🔥 [УСПЕХ] Токен автоматически перехвачен и сохранен!")
-                    print(f"   Стол          : {tbl}")
-                    print(f"   Сервер        : {server}")
-                    print(f"   JSESSIONID    : {token[:8]}...{token[-6:]}")
-                    print("   Кэш сессий    : .session_cache.json")
-                    print("*" * 65 + "\n")
+            context = await p.chromium.launch_persistent_context(**launch_kwargs)
 
-        context.on("request", handle_request)
-        page = context.pages[0] if context.pages else await context.new_page()
-        try:
-            await page.goto(url)
-            while context.pages:
-                await asyncio.sleep(1.0)
-        except Exception:
-            pass
-        finally:
-            await context.close()
+            def handle_request(req):
+                nonlocal captured_count
+                url_str = req.url
+                if "JSESSIONID=" in url_str and ("/game?" in url_str or "/desktop/launcher/?" in url_str):
+                    parsed = urlparse(url_str)
+                    qs = parse_qs(parsed.query)
+                    token = qs.get("JSESSIONID", [""])[0]
+                    tbl = qs.get("tableId", [""])[0] or qs.get("table_id", [""])[0] or "bc281koreanch281"
+                    server = qs.get("socket_server", [""])[0]
+                    if not server and "/game?" in url_str:
+                        server = f"wss://{parsed.netloc}"
+                    origin = req.headers.get("origin") or f"https://client.{parsed.netloc.split('.', 1)[-1]}"
+                    if token and server:
+                        captured_count += 1
+                        sess = SessionInfo(
+                            jsessionid=token,
+                            socket_server=server,
+                            table_id=tbl,
+                            client_origin=origin,
+                        )
+                        save_session_to_cache(sess)
+                        print("\n" + "*" * 65)
+                        print("🔥 [УСПЕХ] Токен автоматически перехвачен и сохранен!")
+                        print(f"   Стол          : {tbl}")
+                        print(f"   Сервер        : {server}")
+                        print(f"   JSESSIONID    : {token[:8]}...{token[-6:]}")
+                        print("   Кэш сессий    : .session_cache.json")
+                        print("*" * 65 + "\n")
+
+            context.on("request", handle_request)
+            page = context.pages[0] if context.pages else await context.new_page()
+            print("Окно браузера открыто. Переход на страницу...")
+
+            async def do_goto():
+                try:
+                    await page.goto(url)
+                except Exception as e:
+                    logger.debug("Page goto non-fatal error: %s", e)
+
+            asyncio.create_task(do_goto())
+
+            while True:
+                try:
+                    if not context.pages:
+                        break
+                    await asyncio.sleep(1.0)
+                except Exception:
+                    break
+
+            try:
+                await context.close()
+            except Exception:
+                pass
+    finally:
+        if bridge:
+            await bridge.close()
 
     print(f"\n[OK] Браузер закрыт. Перехвачено сессий: {captured_count}. Данные сохранены в {profile_dir}/ и .session_cache.json.")
 
@@ -197,6 +234,7 @@ async def fetch_and_save_token(
     provider = PlaywrightSessionProvider(
         user_data_dir=config.session.browser_profile_dir,
         headless=True,
+        proxy=config.session.proxy,
     )
     print(f"\nПолучение токена для стола '{table_id}' через headless-браузер...")
     try:
@@ -262,6 +300,7 @@ async def run_single_table(
         session_provider = PlaywrightSessionProvider(
             user_data_dir=config.session.browser_profile_dir,
             headless=config.session.headless,
+            proxy=config.session.proxy,
         )
     else:
         session_provider = EnvSessionProvider(
@@ -413,6 +452,8 @@ def main():
     # 'login' command
     login_parser = subparsers.add_parser("login", help="Open browser to log in manually and persist session in browser_profile")
     login_parser.add_argument("--url", default="https://1xlite-32085.pro/ru/casino/brand?game=122197", help="Portal URL to open for login")
+    login_parser.add_argument("--proxy", default=None, help="SOCKS5/HTTP proxy URL (defaults to SOCKS5_PROXY env var)")
+    login_parser.add_argument("--env", default=".env", help="Path to .env file")
 
     # 'test-notify' command
     notify_parser = subparsers.add_parser("test-notify", help="Send test alert to verify Telegram/Console delivery")
@@ -446,7 +487,10 @@ def main():
     args = parser.parse_args()
 
     if args.command == "login":
-        asyncio.run(manual_login(args.url))
+        env_p = Path(args.env) if hasattr(args, "env") and args.env else Path(".env")
+        cfg = load_config(env_path=env_p)
+        proxy = getattr(args, "proxy", None) or cfg.socks5_proxy
+        asyncio.run(manual_login(args.url, proxy=proxy))
     elif args.command == "get-token":
         asyncio.run(fetch_and_save_token(args.table, Path(args.config), Path(args.env)))
     elif args.command == "set-token":

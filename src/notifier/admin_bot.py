@@ -48,7 +48,7 @@ class TelegramAdminBot:
             return
 
         self._running = True
-        self._client = self._custom_client or httpx.AsyncClient(timeout=30.0)
+        self._client = self._custom_client or httpx.AsyncClient(timeout=30.0, trust_env=False, proxy=None)
         self._poll_task = asyncio.create_task(self._polling_loop(), name="tg_admin_bot_poll")
         logger.info("TelegramAdminBot started polling (admin password protected).")
 
@@ -81,6 +81,17 @@ class TelegramAdminBot:
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code == 400 and "message is not modified" in resp.text:
+                return None
+            elif resp.status_code == 400 and ("can't parse entities" in resp.text or "entity" in resp.text.lower()):
+                # Fallback without parse_mode if markdown formatting caused an error
+                if "parse_mode" in json_data:
+                    retry_data = dict(json_data)
+                    del retry_data["parse_mode"]
+                    logger.warning("Telegram API %s entity parse error, retrying without parse_mode", method)
+                    retry_resp = await self._client.post(url, json=retry_data)
+                    if retry_resp.status_code == 200:
+                        return retry_resp.json()
+                logger.debug("Telegram API %s returned status %d: %s", method, resp.status_code, resp.text[:150])
                 return None
             else:
                 logger.debug("Telegram API %s returned status %d: %s", method, resp.status_code, resp.text[:150])
