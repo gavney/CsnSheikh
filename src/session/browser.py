@@ -154,11 +154,38 @@ class PlaywrightSessionProvider(SessionProvider):
         launch_kwargs = {
             "user_data_dir": str(self.user_data_dir),
             "headless": self.headless,
-            "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+            "args": [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-accelerated-2d-canvas",
+                "--mute-audio",
+            ],
         }
         if proxy_settings:
             launch_kwargs["proxy"] = proxy_settings
         self._context = await self._playwright.chromium.launch_persistent_context(**launch_kwargs)
+
+        # Block video streams to keep background headless context lightweight and fast
+        async def filter_heavy_traffic(route):
+            req = route.request
+            url_str = req.url.lower()
+            if req.resource_type in ("media", "video") or any(
+                ext in url_str for ext in (".m3u8", ".ts", ".mp4", ".webm", ".flv")
+            ):
+                try:
+                    await route.abort()
+                except Exception:
+                    pass
+            else:
+                try:
+                    await route.continue_()
+                except Exception:
+                    pass
+
+        await self._context.route("**/*", filter_heavy_traffic)
         return self._context
 
     async def get_session(self, table_id: str, force_refresh: bool = False) -> SessionInfo:

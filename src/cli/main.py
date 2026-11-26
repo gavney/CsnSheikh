@@ -164,12 +164,39 @@ async def manual_login(
             launch_kwargs = {
                 "user_data_dir": str(profile_dir),
                 "headless": False,
-                "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+                "args": [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-accelerated-2d-canvas",
+                    "--mute-audio",
+                ],
             }
             if proxy_settings:
                 launch_kwargs["proxy"] = proxy_settings
 
             context = await p.chromium.launch_persistent_context(**launch_kwargs)
+
+            # Block live video feeds and heavy media to keep X11 / CPU responsive
+            async def filter_heavy_traffic(route):
+                req = route.request
+                url_str = req.url.lower()
+                if req.resource_type in ("media", "video") or any(
+                    ext in url_str for ext in (".m3u8", ".ts", ".mp4", ".webm", ".flv")
+                ):
+                    try:
+                        await route.abort()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        await route.continue_()
+                    except Exception:
+                        pass
+
+            await context.route("**/*", filter_heavy_traffic)
 
             def handle_request(req):
                 nonlocal captured_count
