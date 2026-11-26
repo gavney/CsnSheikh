@@ -29,6 +29,9 @@ status:
 login:
 	python3 -m src.cli login
 
+login-direct:
+	python3 -m src.cli login --no-proxy
+
 get-token:
 	python3 -m src.cli get-token --table bc281koreanch281
 

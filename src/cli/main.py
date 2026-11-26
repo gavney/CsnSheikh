@@ -118,7 +118,7 @@ async def run_supervisor(
 
 
 async def manual_login(
-    url: str = "https://1xlite-32085.pro/ru/casino/brand?game=122197",
+    url: str = "https://1xlite-32085.pro/ru/casino/",
     profile_dir: Path = Path("./browser_profile"),
     proxy: Optional[str] = None,
 ) -> None:
@@ -172,6 +172,7 @@ async def manual_login(
                     "--disable-software-rasterizer",
                     "--disable-accelerated-2d-canvas",
                     "--mute-audio",
+                    "--disable-features=Translate",
                 ],
             }
             if proxy_settings:
@@ -179,24 +180,16 @@ async def manual_login(
 
             context = await p.chromium.launch_persistent_context(**launch_kwargs)
 
-            # Block live video feeds and heavy media to keep X11 / CPU responsive
-            async def filter_heavy_traffic(route):
-                req = route.request
-                url_str = req.url.lower()
-                if req.resource_type in ("media", "video") or any(
-                    ext in url_str for ext in (".m3u8", ".ts", ".mp4", ".webm", ".flv")
-                ):
-                    try:
-                        await route.abort()
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        await route.continue_()
-                    except Exception:
-                        pass
+            # Block heavy video streams via regex to avoid main-thread overhead on normal requests
+            import re
+            media_re = re.compile(r"(\.m3u8|\.ts|\.mp4|\.webm|\.flv)(\?.*)?$", re.IGNORECASE)
+            async def filter_media(route):
+                try:
+                    await route.abort()
+                except Exception:
+                    pass
 
-            await context.route("**/*", filter_heavy_traffic)
+            await context.route(media_re, filter_media)
 
             def handle_request(req):
                 nonlocal captured_count
@@ -501,8 +494,9 @@ def main():
 
     # 'login' command
     login_parser = subparsers.add_parser("login", help="Open browser to log in manually and persist session in browser_profile")
-    login_parser.add_argument("--url", default="https://1xlite-32085.pro/ru/casino/brand?game=122197", help="Portal URL to open for login")
+    login_parser.add_argument("--url", default="https://1xlite-32085.pro/ru/casino/", help="Portal URL to open for login")
     login_parser.add_argument("--proxy", default=None, help="SOCKS5/HTTP proxy URL (defaults to SOCKS5_PROXY env var)")
+    login_parser.add_argument("--no-proxy", action="store_true", help="Open browser directly without proxy (much faster and avoids freezing)")
     login_parser.add_argument("--env", default=".env", help="Path to .env file")
 
     # 'test-notify' command
@@ -539,7 +533,10 @@ def main():
     if args.command == "login":
         env_p = Path(args.env) if hasattr(args, "env") and args.env else Path(".env")
         cfg = load_config(env_path=env_p)
-        proxy = getattr(args, "proxy", None) or cfg.socks5_proxy
+        if getattr(args, "no_proxy", False):
+            proxy = None
+        else:
+            proxy = getattr(args, "proxy", None) or cfg.socks5_proxy
         asyncio.run(manual_login(args.url, proxy=proxy))
     elif args.command == "get-token":
         asyncio.run(fetch_and_save_token(args.table, Path(args.config), Path(args.env)))
