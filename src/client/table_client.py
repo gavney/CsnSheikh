@@ -80,6 +80,8 @@ class TableClient:
         self._reconnect_count: int = 0
         self._rounds_received_count: int = 0
         self._current_task: Optional[asyncio.Task] = None
+        self.last_error: Optional[str] = None
+        self.last_error_time: float = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -174,8 +176,11 @@ class TableClient:
 
                 delay = self.backoff.next_delay()
                 self._reconnect_count += 1
+                self.last_error = f"{type(e).__name__}: {e}"
+                self.last_error_time = time.time()
                 logger.warning(
-                    "Stream error for '%s': %s (attempt #%d). Reconnecting in %.2fs...",
+                    "Stream error for '%s' (%s): %s (attempt #%d). Reconnecting in %.2fs...",
+                    self.table_name,
                     self.table_id,
                     e,
                     self.backoff.consecutive_failures,
@@ -198,28 +203,62 @@ class TableClient:
         headers = session.get_headers()
 
         logger.info(
-            "Connecting to %s (proxy: %s, Origin: %s, token: %s)",
+            "Connecting table '%s' to %s (proxy: %s, Origin: %s, token: %s)",
+            self.table_name,
             ws_url,
             mask_token(self.proxy) if self.proxy else "direct",
             headers.get("Origin"),
             mask_token(session.jsessionid)
         )
 
+        sock = None
+        connect_proxy = None
+        ssl_context = None
+        server_hostname = None
+
+        if self.proxy:
+            proxy_clean = self.proxy.strip().strip('"').strip("'")
+            if proxy_clean.startswith("socks5://") or proxy_clean.startswith("socks5h://"):
+                from python_socks.async_.asyncio import Proxy
+                from urllib.parse import urlparse
+                import ssl
+
+                parsed_ws = urlparse(ws_url)
+                dest_port = parsed_ws.port or (443 if parsed_ws.scheme == "wss" else 80)
+                dest_host = parsed_ws.hostname or "127.0.0.1"
+
+                logger.debug("[%s] Opening SOCKS5 TCP tunnel via %s to %s:%d...", self.table_id, mask_token(proxy_clean), dest_host, dest_port)
+                proxy_obj = Proxy.from_url(proxy_clean)
+                sock = await proxy_obj.connect(dest_host=dest_host, dest_port=dest_port, timeout=15.0)
+                logger.debug("[%s] SOCKS5 connection established, upgrading to WebSocket TLS...", self.table_id)
+                if parsed_ws.scheme == "wss":
+                    ssl_context = ssl.create_default_context()
+                    server_hostname = dest_host
+            else:
+                connect_proxy = proxy_clean
+
         connect_kwargs = {
             "additional_headers": headers,
             "ping_interval": None,
             "ping_timeout": None,
             "close_timeout": 5.0,
-            "proxy": self.proxy if self.proxy else None,
         }
+        if sock is not None:
+            connect_kwargs["sock"] = sock
+            if ssl_context:
+                connect_kwargs["ssl"] = ssl_context
+                connect_kwargs["server_hostname"] = server_hostname
+        elif connect_proxy is not None:
+            connect_kwargs["proxy"] = connect_proxy
 
         async with websockets.connect(ws_url, **connect_kwargs) as ws:
             self._ws = ws
             self._last_msg_timestamp = time.time()
+            self.last_error = None
             if self._session_start_time == 0.0:
                 self._session_start_time = time.time()
             self.backoff.reset()
-            logger.info("WebSocket connected successfully for table '%s'", self.table_id)
+            logger.info("WebSocket connected successfully for table '%s' (%s)", self.table_name, self.table_id)
 
             reader_task = asyncio.create_task(self._reader_loop(ws))
             heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))

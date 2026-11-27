@@ -413,3 +413,65 @@ async def test_admin_bot_invalid_number_validation(mock_supervisor):
     await bot._handle_message({"message_id": 28, "chat": {"id": 999, "type": "private"}, "from": {"id": 999}, "text": "abc"})
     assert 999 in bot._waiting_input
     assert "целое число" in bot.send_message.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_admin_bot_logs_and_error_display(mock_supervisor):
+    """Verify logs menu, /logs command, /errors, and error diagnostics in status."""
+    from src.utils.logging import get_logger
+    logger = get_logger("test.bot.logs")
+    logger.error("Database connection refused for table t1")
+
+    bot = TelegramAdminBot(
+        bot_token="test_token",
+        supervisor=mock_supervisor,
+    )
+    bot.send_message = AsyncMock()
+    bot.edit_message = AsyncMock()
+    bot.answer_callback = AsyncMock()
+    bot.send_document = AsyncMock()
+    bot._auth_sessions.add(999)
+
+    # 1. /logs command
+    await bot._handle_message({"message_id": 29, "chat": {"id": 999, "type": "private"}, "from": {"id": 999}, "text": "/logs"})
+    bot.send_message.assert_called()
+    assert "Последние" in bot.send_message.call_args[0][1]
+
+    # 2. /errors command
+    await bot._handle_message({"message_id": 30, "chat": {"id": 999, "type": "private"}, "from": {"id": 999}, "text": "/errors"})
+    assert "ошибки" in bot.send_message.call_args[0][1].lower()
+
+    # 3. Callback act:logs
+    await bot._handle_callback_query({
+        "id": "cq_logs",
+        "from": {"id": 999},
+        "message": {"message_id": 31, "chat": {"id": 999}},
+        "data": "act:logs",
+    })
+    bot.edit_message.assert_called()
+
+    # 4. Status menu includes error detail if client has last_error
+    mock_client = mock_supervisor.clients["t1"]
+    mock_client.is_connected = False
+    mock_client.reconnect_count = 5
+    mock_client.last_error = "TimeoutError: proxy handshake failed"
+
+    await bot._handle_callback_query({
+        "id": "cq_status",
+        "from": {"id": 999},
+        "message": {"message_id": 32, "chat": {"id": 999}},
+        "data": "act:status",
+    })
+    status_text = bot.edit_message.call_args[0][2]
+    assert "connecting (#5)" in status_text or "connecting" in status_text
+    assert "TimeoutError" in status_text
+
+    # 5. Download log document
+    await bot._handle_callback_query({
+        "id": "cq_dl",
+        "from": {"id": 999},
+        "message": {"message_id": 33, "chat": {"id": 999}},
+        "data": "act:logs_download",
+    })
+    bot.send_document.assert_called()
+

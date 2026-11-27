@@ -2,10 +2,11 @@
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 import httpx
 
-from src.utils.logging import get_logger, mask_token
+from src.utils.logging import get_logger, mask_token, get_recent_log_lines, get_full_log_text
 
 logger = get_logger("notifier.admin_bot")
 
@@ -155,6 +156,32 @@ class TelegramAdminBot:
     async def delete_message(self, chat_id: int, message_id: int) -> None:
         await self._api_call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
 
+    async def send_document(
+        self,
+        chat_id: int,
+        filename: str,
+        content: bytes,
+        caption: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Send a document or log file to chat."""
+        if not self._client or not self.bot_token:
+            return None
+        url = f"{self.base_url}/bot{self.bot_token}/sendDocument"
+        files = {"document": (filename, content, "text/plain")}
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        try:
+            resp = await self._client.post(url, data=data, files=files)
+            if resp.status_code == 200:
+                return resp.json()
+            else:
+                logger.debug("Telegram API sendDocument returned status %d: %s", resp.status_code, resp.text[:150])
+                return None
+        except Exception as e:
+            logger.debug("Telegram API sendDocument call failed: %s", e)
+            return None
+
     # -------------------------------------------------------------------------
     # Long Polling Loop
     # -------------------------------------------------------------------------
@@ -256,6 +283,35 @@ class TelegramAdminBot:
             else:
                 await self._send_main_menu(chat_id)
             return
+
+        # 1.05 Direct Slash Commands (when not waiting for input)
+        if text.startswith("/") and user_id not in self._waiting_input:
+            cmd = text.split()[0].lower()
+            if cmd in ("/logs", "/log"):
+                await self._send_logs_view(chat_id, count=30, level=None)
+                return
+            elif cmd in ("/errors", "/err"):
+                await self._send_logs_view(chat_id, count=30, level="WARNING")
+                return
+            elif cmd == "/status":
+                await self._send_status_message(chat_id)
+                return
+            elif cmd == "/token":
+                self._waiting_input[user_id] = {"target": "token"}
+                await self.send_message(
+                    chat_id,
+                    "🔑 *Ввод токена JSESSIONID вручную*\n\n"
+                    "Отправьте сюда значение токена или полную ссылку `wss://...` (или /cancel для отмены):"
+                )
+                return
+            elif cmd == "/refresh":
+                if self.supervisor:
+                    asyncio.create_task(self.supervisor.trigger_proactive_refresh())
+                await self.send_message(chat_id, "🔄 Запущен фоновый процесс обновления токена!")
+                return
+            elif cmd in ("/start", "/menu"):
+                await self._send_main_menu(chat_id)
+                return
 
         # 1.1 Handle token input (manual JSESSIONID or full websocket URL)
         is_token_input = (user_id in self._waiting_input and self._waiting_input[user_id].get("target") == "token")
@@ -587,6 +643,50 @@ class TelegramAdminBot:
             await self.edit_message(chat_id, msg_id, "🔒 Вы вышли из панели управления. Для входа отправьте пароль.")
             return
 
+        if data == "act:logs":
+            await self.answer_callback(cq_id)
+            await self._render_logs_menu(chat_id, msg_id, count=30, level=None)
+            return
+
+        if data.startswith("act:logs_view:"):
+            sub = data.split(":")[-1]
+            await self.answer_callback(cq_id)
+            if sub == "errors":
+                await self._render_logs_menu(chat_id, msg_id, count=30, level="WARNING")
+            else:
+                try:
+                    cnt = int(sub)
+                except ValueError:
+                    cnt = 30
+                await self._render_logs_menu(chat_id, msg_id, count=cnt, level=None)
+            return
+
+        if data == "act:logs_download":
+            await self.answer_callback(cq_id, "Генерация файла логов...")
+            full_text = get_full_log_text()
+            if not full_text:
+                log_file = Path("logs/casino.log")
+                if log_file.exists():
+                    try:
+                        full_text = log_file.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+            if not full_text:
+                full_text = "Лог пуст."
+
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"casino_{now_str}.log"
+            content = full_text.encode("utf-8")
+
+            await self.send_document(
+                chat_id=chat_id,
+                filename=filename,
+                content=content,
+                caption="📄 Полный журнал работы сервиса мониторинга Casino Monitor"
+            )
+            return
+
     # -------------------------------------------------------------------------
     # UI Renderers (Keyboards & Layouts)
     # -------------------------------------------------------------------------
@@ -636,12 +736,56 @@ class TelegramAdminBot:
                     {"text": "🔑 Вставить токен", "callback_data": "act:input_token"},
                 ],
                 [
+                    {"text": "📜 Логи / Ошибки", "callback_data": "act:logs"},
                     {"text": "🔄 Фоновый рефреш", "callback_data": "act:refresh"},
+                ],
+                [
                     {"text": "🔒 Завершить сеанс", "callback_data": "act:logout"},
                 ],
             ]
         }
         return text, keyboard
+
+    def _build_logs_payload(self, count: int = 30, level: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
+        lines = get_recent_log_lines(limit=count, level=level)
+        title = "⚠️ *Последние ошибки и предупреждения*" if level else f"📜 *Последние {count} строк логов*"
+
+        if not lines:
+            body = "_Логов пока нет или фильтр пуст._"
+        else:
+            log_chunk = "\n".join(lines)
+            if len(log_chunk) > 3400:
+                log_chunk = log_chunk[-3400:]
+                log_chunk = log_chunk[log_chunk.find("\n") + 1:] if "\n" in log_chunk else log_chunk
+            safe_chunk = log_chunk.replace("```", "'''")
+            body = f"```text\n{safe_chunk}\n```"
+
+        text = f"{title}\n\n{body}\n_Для скачивания полного файла нажмите кнопку ниже:_"
+        kb = {
+            "inline_keyboard": [
+                [
+                    {"text": "📋 Последние 30", "callback_data": "act:logs_view:30"},
+                    {"text": "📋 Последние 60", "callback_data": "act:logs_view:60"},
+                ],
+                [
+                    {"text": "⚠️ Только ошибки", "callback_data": "act:logs_view:errors"},
+                    {"text": "📥 Скачать файл .txt", "callback_data": "act:logs_download"},
+                ],
+                [
+                    {"text": "🔄 Обновить", "callback_data": f"act:logs_view:{'errors' if level else count}"},
+                    {"text": "⬅️ В меню", "callback_data": "m:main"},
+                ],
+            ]
+        }
+        return text, kb
+
+    async def _send_logs_view(self, chat_id: int, count: int = 30, level: Optional[str] = None) -> None:
+        text, kb = self._build_logs_payload(count=count, level=level)
+        await self.send_message(chat_id, text, reply_markup=kb)
+
+    async def _render_logs_menu(self, chat_id: int, message_id: int, count: int = 30, level: Optional[str] = None) -> None:
+        text, kb = self._build_logs_payload(count=count, level=level)
+        await self.edit_message(chat_id, message_id, text, reply_markup=kb)
 
     def _build_all_tables_payload(self) -> tuple[str, Dict[str, Any]]:
         global_streak = self._get_global_streak_info()
@@ -784,10 +928,9 @@ class TelegramAdminBot:
         text, markup = self._build_table_menu_payload(table_id)
         await self.send_message(chat_id, text, reply_markup=markup)
 
-    async def _render_status_menu(self, chat_id: int, message_id: int) -> None:
+    def _build_status_payload(self) -> tuple[str, Dict[str, Any]]:
         if not self.supervisor:
-            await self.edit_message(chat_id, message_id, "Статус недоступен.")
-            return
+            return "Статус недоступен.", {"inline_keyboard": [[{"text": "⬅️ Назад в меню", "callback_data": "m:main"}]]}
 
         global_streak = self._get_global_streak_info()
         lines = [
@@ -801,27 +944,46 @@ class TelegramAdminBot:
             if client and client.is_connected:
                 status_dot = "🟢"
                 conn_txt = "online"
+                err_detail = ""
             elif t.enabled:
                 status_dot = "🟡"
-                conn_txt = "connecting"
+                reconn = f" (#{client.reconnect_count})" if client and client.reconnect_count > 0 else ""
+                conn_txt = f"connecting{reconn}"
+                err_detail = ""
+                if client and getattr(client, "last_error", None):
+                    err_clean = str(client.last_error)[:70].replace("`", "'")
+                    err_detail = f"\n   └ ⚠️ `{err_clean}`"
             else:
                 status_dot = "🔴"
                 conn_txt = "off"
+                err_detail = ""
+
             custom = self.supervisor.get_table_streak(t.id)
             streak_txt = f"{custom}🔥" if custom else f"{global_streak}"
             window = self.supervisor.windows.get(t.id)
             rounds_count = len(window) if window else 0
-            lines.append(f"{status_dot} *{t.name}*: `{conn_txt}` | {rounds_count} раундов | порог: *{streak_txt}*")
+            lines.append(f"{status_dot} *{t.name}*: `{conn_txt}` | {rounds_count} раундов | порог: *{streak_txt}*{err_detail}")
 
-        lines.append("\n_Нажмите 'Обновить' для актуализации данных._")
+        lines.append("\n_Нажмите 'Обновить' для актуализации или 'Логи' для просмотра ошибок._")
 
         keyboard = {
             "inline_keyboard": [
-                [{"text": "🔄 Обновить данные", "callback_data": "act:status"}],
+                [
+                    {"text": "🔄 Обновить данные", "callback_data": "act:status"},
+                    {"text": "📜 Логи / Ошибки", "callback_data": "act:logs"},
+                ],
                 [{"text": "⬅️ Назад в меню", "callback_data": "m:main"}],
             ]
         }
         text = "\n".join(lines)
         if len(text) > 4000:
             text = text[:3900] + "\n..."
+        return text, keyboard
+
+    async def _render_status_menu(self, chat_id: int, message_id: int) -> None:
+        text, keyboard = self._build_status_payload()
         await self.edit_message(chat_id, message_id, text, reply_markup=keyboard)
+
+    async def _send_status_message(self, chat_id: int) -> None:
+        text, keyboard = self._build_status_payload()
+        await self.send_message(chat_id, text, reply_markup=keyboard)
