@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 import httpx
 
+from src.parser.models import Outcome, RoundResult
 from src.utils.logging import get_logger, mask_token, get_recent_log_lines, get_full_log_text
 
 logger = get_logger("notifier.admin_bot")
@@ -292,6 +293,9 @@ class TelegramAdminBot:
                 return
             elif cmd in ("/errors", "/err"):
                 await self._send_logs_view(chat_id, count=30, level="WARNING")
+                return
+            elif cmd in ("/states", "/roads", "/positions", "/table_states"):
+                await self._send_table_states_message(chat_id)
                 return
             elif cmd == "/status":
                 await self._send_status_message(chat_id)
@@ -618,6 +622,11 @@ class TelegramAdminBot:
             await self._render_status_menu(chat_id, msg_id)
             return
 
+        if data == "act:table_states":
+            await self.answer_callback(cq_id)
+            await self._render_table_states_menu(chat_id, msg_id)
+            return
+
         if data == "act:refresh":
             if self.supervisor:
                 asyncio.create_task(self.supervisor.trigger_proactive_refresh())
@@ -733,13 +742,14 @@ class TelegramAdminBot:
                 ],
                 [
                     {"text": "📊 Статус мониторинга", "callback_data": "act:status"},
-                    {"text": "🔑 Вставить токен", "callback_data": "act:input_token"},
+                    {"text": "🎲 Положения на столах", "callback_data": "act:table_states"},
                 ],
                 [
-                    {"text": "📜 Логи / Ошибки", "callback_data": "act:logs"},
+                    {"text": "🔑 Вставить токен", "callback_data": "act:input_token"},
                     {"text": "🔄 Фоновый рефреш", "callback_data": "act:refresh"},
                 ],
                 [
+                    {"text": "📜 Логи / Ошибки", "callback_data": "act:logs"},
                     {"text": "🔒 Завершить сеанс", "callback_data": "act:logout"},
                 ],
             ]
@@ -881,12 +891,30 @@ class TelegramAdminBot:
 
         table_link = f"[{table.name}]({t_url})" if t_url else f"*{table.name}*"
 
+        recent_rounds_text = ""
+        window = self.supervisor.windows.get(table_id) if self.supervisor else None
+        if window and len(window) > 0:
+            recent = window.get_all()[-10:]
+            def oc_emoji(r: RoundResult) -> str:
+                return "🔵" if r.result == Outcome.PLAYER else ("🔴" if r.result == Outcome.BANKER else "🟢")
+            emojis = " ".join(oc_emoji(r) for r in recent)
+            p_cnt = sum(1 for r in recent if r.result == Outcome.PLAYER)
+            b_cnt = sum(1 for r in recent if r.result == Outcome.BANKER)
+            t_cnt = sum(1 for r in recent if r.result == Outcome.TIE)
+            recent_rounds_text = (
+                f"🎲 *Последние {len(recent)} раундов*: {emojis} ➔\n"
+                f"📊 🔵 И: *{p_cnt}* | 🔴 Б: *{b_cnt}* | 🟢 Н: *{t_cnt}*\n\n"
+            )
+        else:
+            recent_rounds_text = "\n"
+
         text = (
             f"🎯 *Настройка стола*\n\n"
             f"📊 *Стол*: {table_link}\n"
             f"🆔 *ID*: `{table.id}`\n"
             f"🔥 *Текущий порог*: *Игрок {effective_streak} подряд* [{type_str}]\n"
-            f"🔘 *Статус*: {status_str}\n\n"
+            f"🔘 *Статус*: {status_str}\n"
+            f"{recent_rounds_text}"
             "Выберите кнопку или *отправьте число от 1 до N сообщением в чат*:"
         )
 
@@ -970,9 +998,12 @@ class TelegramAdminBot:
             "inline_keyboard": [
                 [
                     {"text": "🔄 Обновить данные", "callback_data": "act:status"},
-                    {"text": "📜 Логи / Ошибки", "callback_data": "act:logs"},
+                    {"text": "🎲 Положения на столах", "callback_data": "act:table_states"},
                 ],
-                [{"text": "⬅️ Назад в меню", "callback_data": "m:main"}],
+                [
+                    {"text": "📜 Логи / Ошибки", "callback_data": "act:logs"},
+                    {"text": "⬅️ Назад в меню", "callback_data": "m:main"},
+                ],
             ]
         }
         text = "\n".join(lines)
@@ -986,4 +1017,114 @@ class TelegramAdminBot:
 
     async def _send_status_message(self, chat_id: int) -> None:
         text, keyboard = self._build_status_payload()
+        await self.send_message(chat_id, text, reply_markup=keyboard)
+
+    def _build_table_states_payload(self) -> tuple[str, Dict[str, Any]]:
+        """Build summary of active tables showing the last 10 outcomes/wins and streak status."""
+        if not self.supervisor:
+            return "Данные столов недоступны.", {
+                "inline_keyboard": [
+                    [{"text": "📊 Статус мониторинга", "callback_data": "act:status"}],
+                    [{"text": "⬅️ Главное меню", "callback_data": "m:main"}],
+                ]
+            }
+
+        lines = [
+            "🎲 *Текущие положения на столах (последние 10 побед)*\n",
+            "🔵 — Игрок (Player) | 🔴 — Банкир (Banker) | 🟢 — Ничья (Tie)",
+            "_Порядок: слева направо (➔ новейший)_\n",
+        ]
+
+        active_count = 0
+        for t in self.supervisor.config.tables:
+            if not t.enabled:
+                continue
+            active_count += 1
+            client = self.supervisor.clients.get(t.id)
+            window = self.supervisor.windows.get(t.id)
+
+            if client and client.is_connected:
+                status_icon = "🟢"
+            elif client and client.is_running:
+                status_icon = "🟡"
+            else:
+                status_icon = "🔴"
+
+            all_rounds = window.get_all() if window else []
+            total_in_shoe = len(all_rounds)
+            last_rounds = all_rounds[-10:] if all_rounds else []
+
+            streak_tag = ""
+            if self.supervisor.rule_engine:
+                for (r_id, tid), state in self.supervisor.rule_engine.states.items():
+                    if tid == t.id and state.current_metric >= 2:
+                        metric_val = int(state.current_metric)
+                        streak_tag = f" | 🔥 {metric_val} подряд"
+                        break
+
+            if not last_rounds:
+                lines.append(
+                    f"{status_icon} *{t.name}* (`{t.id}`)\n"
+                    f"   └ _Раундов пока нет (ожидание данных...)_\n"
+                )
+                continue
+
+            p_count = sum(1 for r in last_rounds if r.result == Outcome.PLAYER)
+            b_count = sum(1 for r in last_rounds if r.result == Outcome.BANKER)
+            t_count = sum(1 for r in last_rounds if r.result == Outcome.TIE)
+
+            def outcome_emoji(r: RoundResult) -> str:
+                if r.result == Outcome.PLAYER:
+                    return "🔵"
+                elif r.result == Outcome.BANKER:
+                    return "🔴"
+                else:
+                    return "🟢"
+
+            road_emojis = " ".join(outcome_emoji(r) for r in last_rounds)
+
+            latest_r = last_rounds[-1]
+            if latest_r.result == Outcome.PLAYER:
+                latest_winner = "🔵 Игрок"
+            elif latest_r.result == Outcome.BANKER:
+                latest_winner = "🔴 Банкир"
+            else:
+                latest_winner = "🟢 Ничья"
+
+            score_txt = f" (счет: {latest_r.score})" if latest_r.score is not None else ""
+
+            lines.append(
+                f"{status_icon} *{t.name}* (раундов: {total_in_shoe}{streak_tag})\n"
+                f"   └ 🏁 *10 последних*: {road_emojis} ➔\n"
+                f"   └ 📊 🔵 И: *{p_count}* | 🔴 Б: *{b_count}* | 🟢 Н: *{t_count}* | Крайний: *{latest_winner}*{score_txt}\n"
+            )
+
+        if active_count == 0:
+            lines.append("_Нет активных столов._\n")
+
+        lines.append("_Нажмите «🔄 Обновить», чтобы получить свежие раунды._")
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "🔄 Обновить положения", "callback_data": "act:table_states"},
+                    {"text": "📊 Статус мониторинга", "callback_data": "act:status"},
+                ],
+                [
+                    {"text": "📜 Логи / Ошибки", "callback_data": "act:logs"},
+                    {"text": "⬅️ Назад в меню", "callback_data": "m:main"},
+                ],
+            ]
+        }
+        text = "\n".join(lines)
+        if len(text) > 4000:
+            text = text[:3900] + "\n..."
+        return text, keyboard
+
+    async def _render_table_states_menu(self, chat_id: int, message_id: int) -> None:
+        text, keyboard = self._build_table_states_payload()
+        await self.edit_message(chat_id, message_id, text, reply_markup=keyboard)
+
+    async def _send_table_states_message(self, chat_id: int) -> None:
+        text, keyboard = self._build_table_states_payload()
         await self.send_message(chat_id, text, reply_markup=keyboard)

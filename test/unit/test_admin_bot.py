@@ -475,3 +475,60 @@ async def test_admin_bot_logs_and_error_display(mock_supervisor):
     })
     bot.send_document.assert_called()
 
+
+@pytest.mark.asyncio
+async def test_admin_bot_table_states_display(mock_supervisor):
+    """Verify table states view showing last 10 outcomes, commands /states and /roads, and keyboard navigation."""
+    # Populate window for t1 with 12 rounds (6 Player, 6 Banker)
+    for i in range(12):
+        outcome = Outcome.PLAYER if i % 2 == 0 else Outcome.BANKER
+        r = RoundResult(round_id=f"r_{i}", table_id="t1", result=outcome, score=8)
+        mock_supervisor.windows["t1"].append(r)
+
+    bot = TelegramAdminBot(
+        bot_token="test_token",
+        supervisor=mock_supervisor,
+    )
+    bot.send_message = AsyncMock()
+    bot.edit_message = AsyncMock()
+    bot.answer_callback = AsyncMock()
+    bot._auth_sessions.add(999)
+
+    # 1. Verify status menu contains 'Положения на столах' button
+    await bot._handle_callback_query({
+        "id": "cq_st",
+        "from": {"id": 999},
+        "message": {"message_id": 34, "chat": {"id": 999}},
+        "data": "act:status",
+    })
+    status_kb = bot.edit_message.call_args[1]["reply_markup"]["inline_keyboard"]
+    callbacks = [btn["callback_data"] for row in status_kb for btn in row]
+    assert "act:table_states" in callbacks
+
+    # 2. Callback act:table_states
+    await bot._handle_callback_query({
+        "id": "cq_states",
+        "from": {"id": 999},
+        "message": {"message_id": 35, "chat": {"id": 999}},
+        "data": "act:table_states",
+    })
+    bot.edit_message.assert_called()
+    states_text = bot.edit_message.call_args[0][2]
+    assert "Текущие положения на столах" in states_text
+    assert "Table One" in states_text
+    assert "🔵" in states_text
+    assert "🔴" in states_text
+    assert "10 последних" in states_text
+
+    # 3. Slash command /states
+    await bot._handle_message({
+        "message_id": 36,
+        "chat": {"id": 999, "type": "private"},
+        "from": {"id": 999},
+        "text": "/states",
+    })
+    bot.send_message.assert_called()
+    cmd_text = bot.send_message.call_args[0][1]
+    assert "Текущие положения на столах" in cmd_text
+
+

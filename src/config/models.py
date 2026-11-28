@@ -33,7 +33,7 @@ class SessionConfig(BaseModel):
     browser_profile_dir: Path = Path("./browser_profile")
     auto_refresh_on_auth_error: bool = True
     headless: bool = True
-    proactive_refresh_interval_sec: float = 1800.0
+    proactive_refresh_interval_sec: float = 840.0
     proxy: Optional[str] = None
 
 

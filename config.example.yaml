@@ -70,7 +70,7 @@ session:
   provider: env   # env | playwright
   browser_profile_dir: ./browser_profile
   auto_refresh_on_auth_error: true
-  proactive_refresh_interval_sec: 1800  # Фоновое автообновление токена каждые 30 минут (0 = выключено)
+  proactive_refresh_interval_sec: 840  # Фоновое автообновление токена каждые 14 минут (0 = выключено)
   # proxy: socks5://127.0.0.1:10808  # SOCKS5 proxy для Playwright (или через SOCKS5_PROXY в .env)
 
 storage:

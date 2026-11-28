@@ -333,6 +333,16 @@ class Supervisor:
                             self.session_provider._default_jsessionid = refreshed_session.jsessionid
                             self.session_provider._default_socket_server = refreshed_session.socket_server
 
+                        # Reconnect active table clients softly so they switch to the fresh token seamlessly
+                        logger.info("Proactively reconnecting active WebSocket clients with refreshed token...")
+                        for client in self.clients.values():
+                            if client._ws:
+                                try:
+                                    await client._ws.close()
+                                    await asyncio.sleep(0.1)
+                                except Exception:
+                                    pass
+
                         now_str = datetime.now().strftime("%H:%M:%S")
                         mins = int(interval / 60)
                         text = (
@@ -571,10 +581,29 @@ class Supervisor:
                 )
                 refreshed = await temp_provider.get_session(target_table_id, force_refresh=True)
                 await temp_provider.close()
+
+            if refreshed:
+                for t in active_tables:
+                    if hasattr(self.session_provider, "register_session"):
+                        self.session_provider.register_session(t.id, refreshed)
+                if hasattr(self.session_provider, "_default_jsessionid"):
+                    self.session_provider._default_jsessionid = refreshed.jsessionid
+                    self.session_provider._default_socket_server = refreshed.socket_server
+
+                logger.info("Reconnecting table clients after manual refresh...")
+                for client in self.clients.values():
+                    if client._ws:
+                        try:
+                            await client._ws.close()
+                            await asyncio.sleep(0.1)
+                        except Exception:
+                            pass
+
             text = (
                 f"🔄 *РУЧНОЕ ОБНОВЛЕНИЕ ТОКЕНА ВЫПОЛНЕНО*\n"
                 f"🔑 Новый токен: `{mask_token(refreshed.jsessionid)}`\n"
-                f"🌐 Сервер: `{refreshed.socket_server}`"
+                f"🌐 Сервер: `{refreshed.socket_server}`\n"
+                f"✅ Столы переподключены к новой сессии."
             )
             await self.notifier.dispatch_system_alert("SESSION_REFRESH", text, priority=Priority.LOW)
         except Exception as e:
