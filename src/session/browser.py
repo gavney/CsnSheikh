@@ -220,50 +220,59 @@ class PlaywrightSessionProvider(SessionProvider):
             def handle_request(req):
                 nonlocal extracted_info
                 url = req.url
-                # Look for websocket handshake or launcher URL
-                if "JSESSIONID=" in url and "pragmaticplaylive" in url and not extracted_info:
+                if extracted_info:
+                    return
+
+                # Broaden interception to match any launcher, iframe or websocket URL containing JSESSIONID
+                if "JSESSIONID=" in url:
                     parsed = urlparse(url)
                     qs = parse_qs(parsed.query)
                     token = qs.get("JSESSIONID", [""])[0]
-                    if token:
-                        server = qs.get("socket_server", [""])[0] or "wss://gs24.pragmaticplaylive.net/game"
-                        if server.endswith("/game"):
-                            server = server[:-5]
-                        origin = req.headers.get("origin") or "https://client.pragmaticplaylive.net"
-                        extracted_info = SessionInfo(
-                            jsessionid=token,
-                            socket_server=server,
-                            table_id=table_id,
-                            client_origin=origin,
-                        )
-                        extracted_event.set()
-                elif "/game?" in url and "JSESSIONID=" in url:
-                    parsed = urlparse(url)
-                    qs = parse_qs(parsed.query)
-                    jsessionid = qs.get("JSESSIONID", [""])[0]
-                    table = qs.get("tableId", [table_id])[0]
-                    socket_server = f"wss://{parsed.netloc}"
-                    origin = req.headers.get("origin") or f"https://client.{parsed.netloc.split('.', 1)[-1]}"
+                    if not token:
+                        return
+
+                    tbl = qs.get("tableId", [""])[0] or qs.get("table_id", [""])[0] or table_id
+                    server = qs.get("socket_server", [""])[0] or qs.get("web_server", [""])[0]
+                    if not server:
+                        if "/game" in url or "gs" in parsed.netloc:
+                            server = f"wss://{parsed.netloc}"
+                        else:
+                            server = "wss://gs24.pplcru001.net"
+                    if server.startswith("https://"):
+                        server = "wss://" + server[8:]
+                    elif server.startswith("http://"):
+                        server = "ws://" + server[7:]
+                    if server.endswith("/game"):
+                        server = server[:-5]
+
+                    origin = req.headers.get("origin")
+                    if not origin:
+                        if parsed.netloc:
+                            origin = f"https://{parsed.netloc}"
+                        else:
+                            origin = "https://client.pplcru001.net"
+
                     extracted_info = SessionInfo(
-                        jsessionid=jsessionid,
-                        socket_server=socket_server,
-                        table_id=table,
+                        jsessionid=token,
+                        socket_server=server,
+                        table_id=tbl,
                         client_origin=origin,
                     )
+                    logger.info("Captured live session token from URL: %s", mask_token(url))
                     extracted_event.set()
 
             page.on("request", handle_request)
 
             try:
                 logger.info("Opening page for table '%s': %s", table_id, target_url)
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
 
-                # Wait for token capture
+                # Wait for token capture (increased from 90s to 180s for slow proxies / background headless loading)
                 try:
-                    await asyncio.wait_for(extracted_event.wait(), timeout=90.0)
+                    await asyncio.wait_for(extracted_event.wait(), timeout=180.0)
                 except asyncio.TimeoutError:
                     raise TimeoutError(
-                        f"Timeout waiting for game session tokens on '{target_url}'. "
+                        f"Timeout waiting for game session tokens on '{target_url}' (waited 180s). "
                         f"Please ensure browser profile is authenticated."
                     )
 
